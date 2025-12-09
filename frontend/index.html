@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 产品文档审查</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/normalize/8.0.1/normalize.min.css" />
+  <style>
+    body { font-family: Arial, sans-serif; background: #f7f7f9; color: #1f2937; margin: 0; padding: 0; }
+    header { background: #0f172a; color: #fff; padding: 16px 24px; }
+    main { max-width: 1080px; margin: 24px auto; padding: 0 16px 48px; }
+    .card { background: #fff; border-radius: 10px; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08); padding: 20px; margin-bottom: 18px; }
+    .flex { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .btn { background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 10px 16px; cursor: pointer; font-weight: 600; }
+    .btn:disabled { background: #94a3b8; cursor: not-allowed; }
+    .progress-bar { width: 100%; background: #e5e7eb; border-radius: 8px; overflow: hidden; height: 10px; margin: 8px 0; }
+    .progress { height: 100%; background: linear-gradient(90deg, #2563eb, #22d3ee); width: 0%; transition: width 0.25s ease; }
+    .status-list { margin: 8px 0; padding-left: 18px; color: #475569; }
+    .tabs { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .tab { padding: 8px 12px; border-radius: 8px; background: #e2e8f0; cursor: pointer; font-weight: 600; }
+    .tab.active { background: #2563eb; color: #fff; }
+    pre { background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 8px; overflow-x: auto; }
+    .badge { display: inline-block; padding: 4px 8px; border-radius: 12px; background: #e0f2fe; color: #0369a1; font-size: 12px; font-weight: 700; }
+    .panel { border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; margin-bottom: 8px; background: #f8fafc; }
+    .panel h4 { margin: 0 0 6px; }
+    .divider { height: 1px; background: #e2e8f0; margin: 12px 0; }
+    code.inline { background: #e2e8f0; padding: 2px 4px; border-radius: 4px; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.min.js" integrity="sha512-S4Gi99ZTSdKCbLlsPdIkjWPA/WIHgdq2d/6V/25ULWlxzrDXgeM9sCBt5U2IJsZKYtefvjb6ZNVQb6+zwGLenw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+</head>
+<body>
+  <header>
+    <h2>AI 产品文档审查（纯前端无状态）</h2>
+  </header>
+  <main>
+    <section class="card">
+      <h3>步骤 1：上传并解析 PDF</h3>
+      <div class="flex">
+        <input type="file" id="fileInput" accept="application/pdf" />
+        <button class="btn" id="startBtn" disabled>开始分析</button>
+        <span id="fileInfo" class="badge">未选择文件</span>
+      </div>
+      <div class="divider"></div>
+      <div class="progress-bar"><div id="progress" class="progress"></div></div>
+      <ul class="status-list" id="statusList"></ul>
+    </section>
+
+    <section class="card">
+      <h3>步骤 2：结果面板</h3>
+      <div class="tabs" id="tabs"></div>
+      <div id="resultPanel" class="panel">暂无结果，请先上传并分析。</div>
+      <div class="divider"></div>
+      <div class="flex">
+        <button class="btn" id="exportJson" disabled>导出 JSON</button>
+        <button class="btn" id="copySummary" disabled>复制摘要</button>
+        <button class="btn" id="rerun" disabled>重新分析</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>API 请求示例</h3>
+      <pre id="apiRequestPreview"></pre>
+    </section>
+  </main>
+
+  <script>
+    const fileInput = document.getElementById('fileInput');
+    const startBtn = document.getElementById('startBtn');
+    const statusList = document.getElementById('statusList');
+    const progressEl = document.getElementById('progress');
+    const tabsEl = document.getElementById('tabs');
+    const resultPanel = document.getElementById('resultPanel');
+    const fileInfo = document.getElementById('fileInfo');
+    const apiRequestPreview = document.getElementById('apiRequestPreview');
+    const exportJsonBtn = document.getElementById('exportJson');
+    const copySummaryBtn = document.getElementById('copySummary');
+    const rerunBtn = document.getElementById('rerun');
+
+    let extractedText = '';
+    let lastResult = null;
+    let currentFile = null;
+
+    const steps = [
+      { label: '解析 PDF 文档', progress: 20 },
+      { label: 'AI 分析中 - 设计缺陷检查', progress: 50 },
+      { label: 'AI 分析中 - 技术方案生成', progress: 75 },
+      { label: '生成可视化报告', progress: 100 },
+    ];
+
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      if (!file) {
+        startBtn.disabled = true;
+        fileInfo.textContent = '未选择文件';
+        return;
+      }
+      if (file.type !== 'application/pdf') {
+        alert('仅支持 PDF 文件');
+        startBtn.disabled = true;
+        return;
+      }
+      if (file.size > 20 * 1024 * 1024) {
+        alert('文件大小请控制在 20MB 以内');
+        startBtn.disabled = true;
+        return;
+      }
+      currentFile = file;
+      fileInfo.textContent = `${file.name} / ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+      startBtn.disabled = false;
+    });
+
+    startBtn.addEventListener('click', async () => {
+      if (!currentFile) return;
+      resetUI();
+      try {
+        logStep(steps[0].label, steps[0].progress);
+        extractedText = await parsePdf(currentFile);
+        logStep(steps[1].label, steps[1].progress);
+
+        const payload = buildRequest(extractedText);
+        apiRequestPreview.textContent = JSON.stringify(payload, null, 2);
+
+        logStep(steps[2].label, steps[2].progress);
+        const res = await fetch('/api/ai-analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) throw new Error('AI 接口返回错误 ' + res.status);
+        const data = await res.json();
+        lastResult = data;
+        renderTabs(data.results);
+        logStep(steps[3].label, steps[3].progress, true);
+        toggleActions(true);
+      } catch (err) {
+        console.error(err);
+        alert('分析失败：' + err.message);
+        toggleActions(false);
+      }
+    });
+
+    rerunBtn.addEventListener('click', () => startBtn.click());
+
+    exportJsonBtn.addEventListener('click', () => {
+      if (!lastResult) return;
+      const blob = new Blob([JSON.stringify(lastResult, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `analysis-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    copySummaryBtn.addEventListener('click', async () => {
+      if (!lastResult) return;
+      const summary = JSON.stringify(lastResult.results || {}, null, 2);
+      await navigator.clipboard.writeText(summary);
+      alert('已复制摘要');
+    });
+
+    function resetUI() {
+      statusList.innerHTML = '';
+      progressEl.style.width = '0%';
+      resultPanel.textContent = '分析中...';
+      tabsEl.innerHTML = '';
+      lastResult = null;
+      toggleActions(false);
+    }
+
+    function toggleActions(enabled) {
+      exportJsonBtn.disabled = !enabled;
+      copySummaryBtn.disabled = !enabled;
+      rerunBtn.disabled = !enabled;
+    }
+
+    function logStep(text, pct, done = false) {
+      const li = document.createElement('li');
+      li.textContent = `[${pct}%] ${done ? '✅' : '▶'} ${text}`;
+      statusList.appendChild(li);
+      progressEl.style.width = `${pct}%`;
+    }
+
+    async function parsePdf(file) {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      let fullText = '';
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const strings = content.items.map(item => item.str).join(' ');
+        fullText += `\n[Page ${i}]\n${strings}\n`;
+      }
+      return fullText;
+    }
+
+    function buildRequest(text) {
+      return {
+        content: text.slice(0, 12000), // 控制长度，示例截断
+        options: {
+          analysis_types: ['design_defects', 'logic_consistency', 'technical_solution', 'risk_assessment'],
+          response_format: 'structured_json',
+        },
+      };
+    }
+
+    function renderTabs(results = {}) {
+      const keys = Object.keys(results);
+      if (!keys.length) {
+        resultPanel.textContent = 'AI 未返回结果。';
+        return;
+      }
+      tabsEl.innerHTML = '';
+      keys.forEach((k, idx) => {
+        const tab = document.createElement('div');
+        tab.className = 'tab' + (idx === 0 ? ' active' : '');
+        tab.textContent = k;
+        tab.onclick = () => setActiveTab(k);
+        tabsEl.appendChild(tab);
+      });
+      setActiveTab(keys[0]);
+    }
+
+    function setActiveTab(key) {
+      [...tabsEl.children].forEach(t => t.classList.toggle('active', t.textContent === key));
+      const data = lastResult?.results?.[key];
+      resultPanel.innerHTML = '';
+      const confidence = lastResult?.metadata?.confidence ?? 0;
+      const bar = document.createElement('div');
+      bar.innerHTML = `<div class="badge">分析置信度: ${(confidence * 100).toFixed(0)}%</div>`;
+      resultPanel.appendChild(bar);
+      const pre = document.createElement('pre');
+      pre.textContent = JSON.stringify(data, null, 2);
+      resultPanel.appendChild(pre);
+    }
+  </script>
+</body>
+</html>
+
