@@ -26,7 +26,42 @@
     .divider { height: 1px; background: #e2e8f0; margin: 12px 0; }
     code.inline { background: #e2e8f0; padding: 2px 4px; border-radius: 4px; }
   </style>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.min.js" integrity="sha512-S4Gi99ZTSdKCbLlsPdIkjWPA/WIHgdq2d/6V/25ULWlxzrDXgeM9sCBt5U2IJsZKYtefvjb6ZNVQb6+zwGLenw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script>
+    // 动态加载PDF.js的函数
+    function loadPDFJS() {
+      return new Promise((resolve, reject) => {
+        // 检查是否已经加载
+        if (typeof pdfjsLib !== 'undefined') {
+          console.log('PDF.js already loaded');
+          resolve();
+          return;
+        }
+
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.min.js';
+        script.onload = function() {
+          console.log('PDF.js loaded successfully');
+          resolve();
+        };
+        script.onerror = function() {
+          console.warn('Primary PDF.js CDN failed, trying fallback...');
+          // 尝试备用CDN
+          const fallbackScript = document.createElement('script');
+          fallbackScript.src = 'https://unpkg.com/pdfjs-dist@4.6.82/build/pdf.min.js';
+          fallbackScript.onload = function() {
+            console.log('PDF.js fallback loaded successfully');
+            resolve();
+          };
+          fallbackScript.onerror = function() {
+            console.error('All PDF.js CDNs failed');
+            reject(new Error('PDF.js加载失败'));
+          };
+          document.head.appendChild(fallbackScript);
+        };
+        document.head.appendChild(script);
+      });
+    }
+  </script>
 </head>
 <body>
   <header>
@@ -69,11 +104,48 @@
 
   <script>
     // PDF.js 初始化
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.worker.min.js';
+    // 设置PDF.js worker路径，带备用方案
+    try {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.worker.min.js';
+    } catch (e) {
+      console.warn('Setting PDF.js worker failed:', e);
+      try {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@4.6.82/build/pdf.worker.min.js';
+      } catch (e2) {
+        console.error('PDF.js worker setup failed completely:', e2);
+      }
+    }
 
-    // 等待DOM加载完成
+    // 等待DOM加载完成和PDF.js加载完成
     document.addEventListener('DOMContentLoaded', function() {
-      console.log('DOM loaded, initializing elements...');
+      // 等待PDF.js加载完成
+      loadPDFJS().then(function() {
+        console.log('DOM loaded and PDF.js ready, initializing elements...');
+
+        // PDF.js 初始化
+        try {
+          pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.worker.min.js';
+          console.log('PDF.js worker configured successfully');
+        } catch (e) {
+          console.warn('Setting PDF.js worker failed:', e);
+          try {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@4.6.82/build/pdf.worker.min.js';
+            console.log('PDF.js worker fallback configured successfully');
+          } catch (e2) {
+            console.error('PDF.js worker setup failed completely:', e2);
+          }
+        }
+
+        initializeApp();
+      }).catch(function(error) {
+        console.error('PDF.js failed to load:', error);
+        alert('PDF.js 库加载失败，请检查网络连接或刷新页面重试');
+      });
+    });
+
+    // 将所有初始化代码移到这个函数中
+    function initializeApp() {
+      console.log('Initializing application...');
 
       const fileInput = document.getElementById('fileInput');
       const startBtn = document.getElementById('startBtn');
@@ -101,6 +173,9 @@
         saveKeyBtn.disabled = true;
       }
 
+      // 初始化按钮状态
+      startBtn.disabled = !canStartAnalysis();
+
     const steps = [
       { label: '解析 PDF 文档', progress: 20 },
       { label: 'AI 分析中 - 设计缺陷检查', progress: 50 },
@@ -120,6 +195,9 @@
       saveKeyBtn.textContent = '已保存';
       saveKeyBtn.disabled = true;
       alert('API 密钥已保存到本地存储');
+
+      // 更新开始分析按钮状态
+      startBtn.disabled = !canStartAnalysis();
     });
 
       // 检查是否可以开始分析
@@ -136,23 +214,50 @@
         console.log('No file selected');
         startBtn.disabled = true;
         fileInfo.textContent = '未选择文件';
+        fileInfo.className = 'badge';
         return;
       }
+
+      console.log('File selected:', file.name, 'Type:', file.type, 'Size:', file.size);
+
+      // 检查文件类型
       if (file.type !== 'application/pdf') {
+        console.log('Invalid file type:', file.type);
         alert('仅支持 PDF 文件');
         startBtn.disabled = true;
+        fileInfo.textContent = '文件类型错误（仅支持PDF）';
+        fileInfo.className = 'badge';
+        fileInfo.style.background = '#fecaca';
+        fileInfo.style.color = '#dc2626';
         return;
       }
+
+      // 检查文件大小
       if (file.size > 20 * 1024 * 1024) {
+        console.log('File too large:', file.size);
         alert('文件大小请控制在 20MB 以内');
         startBtn.disabled = true;
+        fileInfo.textContent = '文件过大（最大20MB）';
+        fileInfo.className = 'badge';
+        fileInfo.style.background = '#fecaca';
+        fileInfo.style.color = '#dc2626';
         return;
       }
+
       currentFile = file;
       fileInfo.textContent = `${file.name} / ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+      fileInfo.className = 'badge';
+      fileInfo.style.background = '';
+      fileInfo.style.color = '';
+
       const canStart = canStartAnalysis();
       console.log('File selected:', file.name, 'Can start:', canStart, 'API Key exists:', !!apiKey);
       startBtn.disabled = !canStart;
+
+      // 如果有API密钥但按钮仍被禁用，显示提示
+      if (!canStart && apiKey) {
+        console.log('API key exists but start button disabled - check canStartAnalysis logic');
+      }
     });
 
     startBtn.addEventListener('click', async () => {
@@ -338,7 +443,7 @@ ${text.slice(0, 12000)}
     }
 
     console.log('Initialization complete');
-    }); // 关闭DOMContentLoaded监听器
+    } // 关闭initializeApp函数
   </script>
 </body>
 </html>
