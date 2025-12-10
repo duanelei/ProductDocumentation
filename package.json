@@ -1,0 +1,33 @@
+{
+  "name": "product-documentation-review",
+  "version": "1.0.0",
+  "description": "AI-powered product documentation review tool - Frontend Only Version",
+  "main": "frontend/index.html",
+  "scripts": {
+    "start": "npx serve frontend -l 3000",
+    "dev": "npx serve frontend --cors",
+    "build": "echo 'No build step required - static files only'",
+    "preview": "npx serve frontend"
+  },
+  "keywords": [
+    "ai",
+    "pdf",
+    "documentation",
+    "review",
+    "analysis",
+    "frontend"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "serve": "^14.2.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "homepage": "frontend/index.html"
+}
+
+
+
