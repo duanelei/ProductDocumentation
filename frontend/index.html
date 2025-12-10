@@ -91,6 +91,15 @@
       <h3>步骤 2：结果面板</h3>
       <div class="tabs" id="tabs"></div>
       <div id="resultPanel" class="panel">暂无结果，请先上传并分析。</div>
+      <div id="docStats" class="panel" style="display: none; margin-top: 12px;">
+        <h4>文档处理统计</h4>
+        <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+          <div class="badge" id="docLength">文档长度: --</div>
+          <div class="badge" id="chunkCount">分块数量: --</div>
+          <div class="badge" id="avgChunkSize">平均块大小: --</div>
+        </div>
+      </div>
+
       <div id="tokenUsage" class="panel" style="display: none; margin-top: 12px;">
         <h4>Token 使用情况</h4>
         <div style="display: flex; gap: 16px; flex-wrap: wrap;">
@@ -266,10 +275,253 @@
       startBtn.disabled = !canStartAnalysis();
 
     const steps = [
-      { label: '解析 PDF 文档', progress: 20 },
-      { label: 'AI 分析中 - 设计缺陷检查', progress: 50 },
-      { label: 'AI 分析中 - 技术方案生成', progress: 75 },
+      { label: '解析 PDF 文档', progress: 8 },
+      { label: 'AI 分析文档结构', progress: 15 },
+      { label: 'AI 分析中 - 设计缺陷检查', progress: 35 },
+      { label: 'AI 分析中 - 逻辑一致性分析', progress: 55 },
+      { label: 'AI 分析中 - 技术方案建议', progress: 75 },
+      { label: 'AI 分析中 - 风险评估', progress: 95 },
       { label: '生成可视化报告', progress: 100 },
+    ];
+
+    // AI智能文档分析和分块策略
+    const documentProcessor = {
+      // 使用AI分析文档结构并分块
+      async analyzeDocumentStructure(text) {
+        const analysisPrompt = `请分析以下产品文档，识别文档结构并将其分成有逻辑意义的段落块。返回JSON格式：
+
+文档内容:
+${text.substring(0, 8000)}
+
+请返回以下结构的JSON：
+{
+  "document_summary": "文档整体摘要（100字以内）",
+  "sections": [
+    {
+      "id": "section_1",
+      "title": "段落标题/主题",
+      "content": "段落完整内容",
+      "category": "功能描述|设计说明|技术实现|风险评估|其他",
+      "relevance": {
+        "设计缺陷检查": 0-10的相关度评分,
+        "逻辑一致性分析": 0-10的相关度评分,
+        "技术方案建议": 0-10的相关度评分,
+        "风险评估": 0-10的相关度评分
+      }
+    }
+  ],
+  "metadata": {
+    "total_sections": 0,
+    "total_length": 0
+  }
+}`;
+
+        const provider = apiProvider.value;
+        let apiUrl = 'https://api.openai.com/v1/chat/completions';
+        let model = 'gpt-4o-mini';
+
+        if (provider === 'deepseek') {
+          apiUrl = 'https://api.deepseek.com/v1/chat/completions';
+          model = 'deepseek-chat';
+        } else if (provider === 'custom') {
+          apiUrl = customApiUrl.value;
+          model = customModel.value;
+        }
+
+        const payload = {
+          model: model,
+          temperature: 0.1,
+          messages: [
+            { role: 'system', content: '你是一个文档结构分析专家，请返回纯JSON格式。' },
+            { role: 'user', content: analysisPrompt },
+          ],
+        };
+
+        try {
+          const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify(payload),
+          });
+
+          if (!response.ok) {
+            throw new Error(`文档分析失败: ${response.status}`);
+          }
+
+          const data = await response.json();
+          let contentStr = data.choices[0].message.content;
+
+          // 清理可能的markdown代码块格式
+          if (contentStr.startsWith('```json')) {
+            contentStr = contentStr.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+          } else if (contentStr.startsWith('```')) {
+            // 处理其他代码块格式
+            contentStr = contentStr.replace(/^```\s*/, '').replace(/\s*```$/, '');
+          }
+
+          const result = JSON.parse(contentStr.trim());
+
+          return {
+            ...result,
+            usage: data.usage,
+            originalText: text
+          };
+        } catch (error) {
+          console.error('AI文档分析失败:', error);
+          // 如果是JSON解析错误，尝试降级处理
+          if (error instanceof SyntaxError && error.message.includes('JSON')) {
+            console.warn('尝试修复JSON解析错误...');
+            try {
+              // 再次尝试清理并解析
+              let fixedContent = data.choices[0].message.content;
+              // 更激进的清理
+              fixedContent = fixedContent.replace(/```json\s*/g, '').replace(/```\s*$/g, '');
+              fixedContent = fixedContent.replace(/```\w*\s*/g, '').replace(/```\s*$/g, '');
+              fixedContent = fixedContent.trim();
+
+              const result = JSON.parse(fixedContent);
+              console.log('JSON解析修复成功');
+              return {
+                ...result,
+                usage: data.usage,
+                originalText: text
+              };
+            } catch (fixError) {
+              console.error('JSON解析修复失败:', fixError);
+            }
+          }
+          // 降级到传统分块方法
+          return this.fallbackChunking(text);
+        }
+      },
+
+      // 降级方案：传统分块方法
+      fallbackChunking(text) {
+        const paragraphs = text.split('\n\n').filter(p => p.trim().length > 100);
+        const chunks = [];
+        let currentChunk = '';
+        let sectionId = 1;
+
+        for (const paragraph of paragraphs) {
+          if ((currentChunk + paragraph).length > 2000 && currentChunk.length > 0) {
+            chunks.push({
+              id: `fallback_${sectionId}`,
+              title: `文档段落 ${sectionId}`,
+              content: currentChunk.trim(),
+              category: '其他',
+              relevance: {
+                '设计缺陷检查': 5,
+                '逻辑一致性分析': 5,
+                '技术方案建议': 5,
+                '风险评估': 5
+              }
+            });
+            sectionId++;
+            currentChunk = paragraph;
+          } else {
+            currentChunk += '\n\n' + paragraph;
+          }
+        }
+
+        if (currentChunk.trim()) {
+          chunks.push({
+            id: `fallback_${sectionId}`,
+            title: `文档段落 ${sectionId}`,
+            content: currentChunk.trim(),
+            category: '其他',
+            relevance: {
+              '设计缺陷检查': 5,
+              '逻辑一致性分析': 5,
+              '技术方案建议': 5,
+              '风险评估': 5
+            }
+          });
+        }
+
+        return {
+          document_summary: '文档分析失败，使用传统分块方法',
+          sections: chunks,
+          metadata: {
+            total_sections: chunks.length,
+            total_length: text.length
+          },
+          usage: null,
+          originalText: text
+        };
+      },
+
+      // 根据分析类型选择最相关的段落
+      getRelevantSections(processedDoc, analysisType) {
+        const { sections } = processedDoc;
+        const analysisKey = analysisType.key;
+
+        // 按相关度排序
+        const sortedSections = sections
+          .filter(section => section.relevance && section.relevance[analysisKey] > 0)
+          .sort((a, b) => (b.relevance[analysisKey] || 0) - (a.relevance[analysisKey] || 0));
+
+        // 选择前3个最相关的段落
+        const topSections = sortedSections.slice(0, 3);
+
+        // 如果没有找到足够的相关段落，补充一些通用段落
+        if (topSections.length < 2) {
+          const generalSections = sections
+            .filter(section => !topSections.includes(section))
+            .slice(0, 2 - topSections.length);
+          topSections.push(...generalSections);
+        }
+
+        return topSections;
+      },
+
+      // 生成段落组合内容
+      generateContentForAnalysis(sections, maxLength = 3000) {
+        const combinedContent = sections
+          .map(section => `[${section.title}]\n${section.content}`)
+          .join('\n\n---\n\n');
+
+        // 如果内容过长，进行智能截断
+        if (combinedContent.length > maxLength) {
+          const truncated = combinedContent.substring(0, maxLength);
+          const lastSectionBreak = truncated.lastIndexOf('\n\n---\n\n');
+          if (lastSectionBreak > maxLength * 0.7) {
+            return truncated.substring(0, lastSectionBreak) + '\n\n[内容已截断以控制token消耗]';
+          }
+          return truncated + '\n\n[内容已截断以控制token消耗]';
+        }
+
+        return combinedContent;
+      }
+    };
+
+    const analysisTypes = [
+      {
+        key: '设计缺陷检查',
+        name: '设计缺陷检查',
+        prompt: '请基于提供的文档片段分析设计缺陷，重点关注UI/UX和交互逻辑问题。',
+        maxContentLength: 3000
+      },
+      {
+        key: '逻辑一致性分析',
+        name: '逻辑一致性分析',
+        prompt: '请基于提供的文档片段分析逻辑一致性，检查是否存在矛盾或不一致的地方。',
+        maxContentLength: 2500
+      },
+      {
+        key: '技术方案建议',
+        name: '技术方案建议',
+        prompt: '请基于提供的文档片段提出技术实现方案建议。',
+        maxContentLength: 3500
+      },
+      {
+        key: '风险评估',
+        name: '风险评估',
+        prompt: '请基于提供的文档片段评估潜在风险和技术债务。',
+        maxContentLength: 2000
+      }
     ];
 
     // 保存API设置
@@ -366,17 +618,68 @@
       try {
         logStep(steps[0].label, steps[0].progress);
         extractedText = await parsePdf(currentFile);
-        logStep(steps[1].label, steps[1].progress);
 
-        const payload = buildApiRequest(extractedText);
-        apiRequestPreview.textContent = JSON.stringify(payload, null, 2);
+        // AI智能文档结构分析
+        logStep('AI分析文档结构中...', 15);
+        const processedDoc = await documentProcessor.analyzeDocumentStructure(extractedText);
+        updateDocStats(processedDoc);
+        console.log(`AI已分析文档：${processedDoc.sections.length}个段落，总长度：${processedDoc.metadata.total_length}字符`);
 
-        logStep(steps[2].label, steps[2].progress);
-        const data = await callApi(payload);
-        lastResult = data;
-        renderTabs(data.results);
-        updateTokenUsage(data.usage);
-        logStep(steps[3].label, steps[3].progress, true);
+        // 初始化结果收集
+        const allResults = {};
+        let totalUsage = processedDoc.usage ? {
+          prompt_tokens: processedDoc.usage.prompt_tokens || 0,
+          completion_tokens: processedDoc.usage.completion_tokens || 0,
+          total_tokens: processedDoc.usage.total_tokens || 0
+        } : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+
+        // 显示预处理结果（文档结构分析）
+        if (processedDoc.document_summary) {
+          allResults['文档结构分析'] = `📄 文档摘要：${processedDoc.document_summary}\n\n📊 分析结果：共识别${processedDoc.sections.length}个段落，包括：\n${
+            processedDoc.sections.map(s => `• ${s.title} (${s.category})`).join('\n')
+          }`;
+          renderTabs(allResults); // 立即显示预处理结果
+        }
+
+        // 逐个分析每个环节
+        for (let i = 0; i < analysisTypes.length; i++) {
+          const analysisType = analysisTypes[i];
+          const stepIndex = i + 2; // steps[2]开始是第一个分析步骤
+
+          logStep(steps[stepIndex].label, steps[stepIndex].progress);
+
+          const payload = buildApiRequest(processedDoc, analysisType);
+          if (i === 0) { // 只显示第一个请求的预览
+            apiRequestPreview.textContent = JSON.stringify(payload, null, 2);
+          }
+
+          const data = await callApi(payload);
+
+          // 合并结果
+          allResults[analysisType.key] = data.result || data.results?.[analysisType.key] || '分析失败';
+
+          // 累加token使用情况
+          if (data.usage) {
+            totalUsage.prompt_tokens += data.usage.prompt_tokens || 0;
+            totalUsage.completion_tokens += data.usage.completion_tokens || 0;
+            totalUsage.total_tokens += data.usage.total_tokens || 0;
+          }
+
+          // 每个分析完成后立即更新UI
+          renderTabs(allResults);
+          updateTokenUsage(totalUsage.total_tokens > 0 ? totalUsage : null);
+        }
+
+        // 保存完整结果
+        lastResult = {
+          success: true,
+          analysis_id: crypto.randomUUID(),
+          results: allResults,
+          metadata: { confidence: 0.8 },
+          usage: totalUsage.total_tokens > 0 ? totalUsage : null,
+        };
+
+        logStep(steps[6].label, steps[6].progress, true); // 最后一步
         toggleActions(true);
       } catch (err) {
         console.error('Analysis failed:', err);
@@ -579,6 +882,7 @@
       tabsEl.innerHTML = '';
       lastResult = null;
       toggleActions(false);
+      updateDocStats(null); // 隐藏文档统计
       updateTokenUsage(null); // 隐藏token使用情况
     }
 
@@ -588,16 +892,38 @@
       rerunBtn.disabled = !enabled;
     }
 
+    function updateDocStats(processedDoc) {
+      const docStatsEl = document.getElementById('docStats');
+      const docLengthEl = document.getElementById('docLength');
+      const chunkCountEl = document.getElementById('chunkCount');
+      const avgChunkSizeEl = document.getElementById('avgChunkSize');
+
+      if (processedDoc && processedDoc.metadata) {
+        const totalLength = processedDoc.metadata.total_length || processedDoc.totalLength || 0;
+        const sectionCount = processedDoc.metadata.total_sections || processedDoc.sections?.length || 0;
+        const avgSize = totalLength > 0 && sectionCount > 0
+          ? Math.round(totalLength / sectionCount)
+          : 0;
+
+        docLengthEl.textContent = `文档长度: ${totalLength.toLocaleString()} 字符`;
+        chunkCountEl.textContent = `分析段落: ${sectionCount} 个`;
+        avgChunkSizeEl.textContent = `平均段落大小: ${avgSize.toLocaleString()} 字符`;
+        docStatsEl.style.display = 'block';
+      } else {
+        docStatsEl.style.display = 'none';
+      }
+    }
+
     function updateTokenUsage(usage) {
       const tokenUsageEl = document.getElementById('tokenUsage');
       const promptTokensEl = document.getElementById('promptTokens');
       const completionTokensEl = document.getElementById('completionTokens');
       const totalTokensEl = document.getElementById('totalTokens');
 
-      if (usage) {
+      if (usage && usage.total_tokens > 0) {
         promptTokensEl.textContent = `输入: ${usage.prompt_tokens || 0}`;
         completionTokensEl.textContent = `输出: ${usage.completion_tokens || 0}`;
-        totalTokensEl.textContent = `总计: ${usage.total_tokens || 0}`;
+        totalTokensEl.textContent = `总计: ${usage.total_tokens || 0} (已优化分块处理)`;
         tokenUsageEl.style.display = 'block';
       } else {
         tokenUsageEl.style.display = 'none';
@@ -628,27 +954,23 @@
       return fullText;
     }
 
-    function buildApiRequest(text) {
-      const prompt = `请基于以下产品文档文本完成审查，并返回纯JSON格式（不要包含markdown代码块标记）：
+    function buildApiRequest(processedDoc, analysisType) {
+      // 获取与当前分析类型最相关的段落
+      const relevantSections = documentProcessor.getRelevantSections(processedDoc, analysisType);
+      const contentToAnalyze = documentProcessor.generateContentForAnalysis(relevantSections, analysisType.maxContentLength);
 
-分析类型: design_defects, logic_consistency, technical_solution, risk_assessment
+      const prompt = `请基于以下文档片段进行${analysisType.name}，并返回纯JSON格式（不要包含markdown代码块标记）：
+
+分析要求: ${analysisType.prompt}
 响应格式: 纯JSON，不要使用\`\`\`json代码块格式
 
-文档内容:
-${text.slice(0, 12000)}
+文档片段 (已由AI智能分析并选择最相关的内容):
+${contentToAnalyze}
 
 请返回以下结构的纯JSON（直接以{开头，不要任何markdown格式）：
 {
-  "results": {
-    "设计缺陷检查": "详细分析内容...",
-    "逻辑一致性分析": "详细分析内容...",
-    "技术方案建议": "详细分析内容...",
-    "风险评估": "详细分析内容..."
-  },
-  "metadata": {
-    "confidence": 0.85,
-    "analysis_time": "2024-12-XX"
-  }
+  "result": "详细的${analysisType.name}分析内容...",
+  "confidence": 0.85
 }`;
 
       const provider = apiProvider.value;
@@ -787,8 +1109,8 @@ ${text.slice(0, 12000)}
         return {
           success: true,
           analysis_id: crypto.randomUUID(),
-          results: parsed.results || {},
-          metadata: parsed.metadata || { confidence: 0.8 },
+          result: parsed.result || parsed.content || contentStr,
+          confidence: parsed.confidence || 0.8,
           usage: usage,
         };
       } catch (e) {
@@ -797,8 +1119,8 @@ ${text.slice(0, 12000)}
         return {
           success: true,
           analysis_id: crypto.randomUUID(),
-          results: { "分析结果": contentStr },
-          metadata: { confidence: 0.6 },
+          result: contentStr,
+          confidence: 0.6,
           usage: usage,
         };
       }
@@ -808,31 +1130,67 @@ ${text.slice(0, 12000)}
 
     function renderTabs(results = {}) {
       currentResults = results; // 保存当前的结果数据
-      const keys = Object.keys(results);
-      if (!keys.length) {
-        resultPanel.textContent = 'AI 未返回结果。';
-        return;
-      }
+      const completedKeys = Object.keys(results);
+      const allKeys = ['文档结构分析', ...analysisTypes.map(t => t.key)];
+
       tabsEl.innerHTML = '';
-      keys.forEach((k, idx) => {
+
+      allKeys.forEach((k, idx) => {
         const tab = document.createElement('div');
-        tab.className = 'tab' + (idx === 0 ? ' active' : '');
-        tab.textContent = k;
+        const isCompleted = completedKeys.includes(k);
+        const isActive = idx === 0 || (!completedKeys.includes(allKeys[0]) && completedKeys.includes(k));
+
+        tab.className = 'tab' + (isActive ? ' active' : '');
+        tab.textContent = isCompleted ? k : `${k} (分析中...)`;
+        tab.style.opacity = isCompleted ? '1' : '0.6';
         tab.onclick = () => setActiveTab(k);
         tabsEl.appendChild(tab);
       });
-      setActiveTab(keys[0]);
+
+      // 如果有任何结果，显示第一个完成的标签
+      const firstCompletedKey = allKeys.find(k => completedKeys.includes(k));
+      if (firstCompletedKey) {
+        setActiveTab(firstCompletedKey);
+      } else {
+        resultPanel.innerHTML = '<div class="result-content"><p>AI正在分析文档结构，请稍候...</p></div>';
+      }
     }
 
     function setActiveTab(key) {
-      [...tabsEl.children].forEach(t => t.classList.toggle('active', t.textContent === key));
-      const data = currentResults?.[key];
+      // 处理带"(分析中...)"后缀的标签名
+      const cleanKey = key.replace(' (分析中...)', '');
+      [...tabsEl.children].forEach(t => {
+        const tabKey = t.textContent.replace(' (分析中...)', '');
+        t.classList.toggle('active', tabKey === cleanKey);
+      });
 
-      resultPanel.innerHTML = `
-        <div class="result-content">
-          ${renderAnalysisContent(key, data)}
-        </div>
-      `;
+      const data = currentResults?.[cleanKey];
+
+      if (data) {
+        resultPanel.innerHTML = `
+          <div class="result-content">
+            ${renderAnalysisContent(cleanKey, data)}
+          </div>
+        `;
+      } else {
+        // 显示等待信息
+        const waitingMessages = {
+          '文档结构分析': 'AI正在分析文档结构和分块，请稍候...',
+          '设计缺陷检查': '正在检查UI/UX设计和交互逻辑缺陷...',
+          '逻辑一致性分析': '正在分析文档逻辑一致性和潜在矛盾...',
+          '技术方案建议': '正在生成技术实现方案建议...',
+          '风险评估': '正在评估潜在风险和技术债务...'
+        };
+
+        resultPanel.innerHTML = `
+          <div class="result-content">
+            <div style="text-align: center; padding: 40px; color: #6b7280;">
+              <div style="font-size: 48px; margin-bottom: 16px;">⏳</div>
+              <p style="font-size: 16px; margin: 0;">${waitingMessages[cleanKey] || '分析进行中...'}</p>
+            </div>
+          </div>
+        `;
+      }
     }
 
     function getTabIcon(key) {
