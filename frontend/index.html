@@ -91,6 +91,14 @@
       <h3>步骤 2：结果面板</h3>
       <div class="tabs" id="tabs"></div>
       <div id="resultPanel" class="panel">暂无结果，请先上传并分析。</div>
+      <div id="tokenUsage" class="panel" style="display: none; margin-top: 12px;">
+        <h4>Token 使用情况</h4>
+        <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+          <div class="badge" id="promptTokens">输入: --</div>
+          <div class="badge" id="completionTokens">输出: --</div>
+          <div class="badge" id="totalTokens">总计: --</div>
+        </div>
+      </div>
       <div class="divider"></div>
       <div class="flex">
         <button class="btn" id="testConnection">测试连接</button>
@@ -367,6 +375,7 @@
         const data = await callApi(payload);
         lastResult = data;
         renderTabs(data.results);
+        updateTokenUsage(data.usage);
         logStep(steps[3].label, steps[3].progress, true);
         toggleActions(true);
       } catch (err) {
@@ -570,12 +579,29 @@
       tabsEl.innerHTML = '';
       lastResult = null;
       toggleActions(false);
+      updateTokenUsage(null); // 隐藏token使用情况
     }
 
     function toggleActions(enabled) {
       exportJsonBtn.disabled = !enabled;
       copySummaryBtn.disabled = !enabled;
       rerunBtn.disabled = !enabled;
+    }
+
+    function updateTokenUsage(usage) {
+      const tokenUsageEl = document.getElementById('tokenUsage');
+      const promptTokensEl = document.getElementById('promptTokens');
+      const completionTokensEl = document.getElementById('completionTokens');
+      const totalTokensEl = document.getElementById('totalTokens');
+
+      if (usage) {
+        promptTokensEl.textContent = `输入: ${usage.prompt_tokens || 0}`;
+        completionTokensEl.textContent = `输出: ${usage.completion_tokens || 0}`;
+        totalTokensEl.textContent = `总计: ${usage.total_tokens || 0}`;
+        tokenUsageEl.style.display = 'block';
+      } else {
+        tokenUsageEl.style.display = 'none';
+      }
     }
 
     function logStep(text, pct, done = false) {
@@ -659,6 +685,7 @@ ${text.slice(0, 12000)}
       console.log(`Using API provider: ${provider}, URL: ${apiUrl}`);
 
       let contentStr = '{}'; // 默认值
+      let usage = null; // 初始化usage变量
 
       try {
         // 添加超时控制
@@ -727,6 +754,9 @@ ${text.slice(0, 12000)}
         const data = await response.json();
         contentStr = data?.choices?.[0]?.message?.content || '{}';
 
+        // 提取token使用情况
+        usage = data?.usage || null;
+
       } catch (error) {
         console.error('OpenAI API request failed:', error);
 
@@ -759,6 +789,7 @@ ${text.slice(0, 12000)}
           analysis_id: crypto.randomUUID(),
           results: parsed.results || {},
           metadata: parsed.metadata || { confidence: 0.8 },
+          usage: usage,
         };
       } catch (e) {
         // 如果解析失败，返回基本的结构
@@ -768,6 +799,7 @@ ${text.slice(0, 12000)}
           analysis_id: crypto.randomUUID(),
           results: { "分析结果": contentStr },
           metadata: { confidence: 0.6 },
+          usage: usage,
         };
       }
     }
