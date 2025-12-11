@@ -53,7 +53,6 @@
     .success { background: #d1fae5; padding: 2px 4px; border-radius: 3px; font-weight: 500; color: #059669; }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  </script>
 </head>
 <body>
   <header>
@@ -277,44 +276,529 @@
     const steps = [
       { label: '解析 PDF 文档', progress: 8 },
       { label: 'AI 分析文档结构', progress: 15 },
-      { label: 'AI 分析中 - 设计缺陷检查', progress: 35 },
-      { label: 'AI 分析中 - 逻辑一致性分析', progress: 55 },
-      { label: 'AI 分析中 - 技术方案建议', progress: 75 },
+      { label: 'AI 分析中 - 设计缺陷检查', progress: 40 },
+      { label: 'AI 分析中 - 逻辑一致性分析', progress: 70 },
       { label: 'AI 分析中 - 风险评估', progress: 95 },
       { label: '生成可视化报告', progress: 100 },
     ];
 
     // AI智能文档分析和分块策略
     const documentProcessor = {
-      // 使用AI分析文档结构并分块
-      async analyzeDocumentStructure(text) {
-        const analysisPrompt = `请分析以下产品文档，识别文档结构并将其分成有逻辑意义的段落块。返回JSON格式：
+      // 分阶段AI智能文档分析（一次对话完成所有步骤）
+      async performStagedAnalysis(text) {
+        const provider = apiProvider.value;
+        let apiUrl = 'https://api.openai.com/v1/chat/completions';
+        let model = 'gpt-4o-mini';
 
-文档内容:
-${text.substring(0, 8000)}
+        console.log(`performStagedAnalysis: provider=${provider}`);
 
-请返回以下结构的JSON：
+        if (provider === 'deepseek') {
+          apiUrl = 'https://api.deepseek.com/v1/chat/completions';
+          model = 'deepseek-chat';
+          console.log(`DeepSeek selected: apiUrl=${apiUrl}, model=${model}`);
+        } else if (provider === 'custom') {
+          apiUrl = customApiUrl.value;
+          model = customModel.value;
+          console.log(`Custom API selected: apiUrl=${apiUrl}, model=${model}`);
+        } else {
+          console.log(`OpenAI selected: apiUrl=${apiUrl}, model=${model}`);
+        }
+
+        // 第一阶段：文档结构分析
+        const structurePrompt = `请作为专业的产品文档分析师，深度分析以下文档内容，为后续精确的质量分析做准备。请重点关注文档的逻辑结构、内容完整性和潜在问题点。
+
+分析要求：
+1. 识别文档的核心章节和逻辑层次结构
+2. 将内容划分为有意义的功能模块或主题段落
+3. 为每个段落提供精确的分类标签
+4. 评估段落对不同质量分析维度的相关性（0-10分）
+5. 考虑文档的上下文关系和依赖性
+
+文档内容：
+${text.substring(0, 10000)}
+
+请返回精确的JSON结构：
 {
-  "document_summary": "文档整体摘要（100字以内）",
+  "document_summary": "文档整体摘要（150字以内，包含文档类型、主要功能、关键特点）",
+  "document_type": "产品需求文档|技术设计文档|用户手册|其他",
   "sections": [
     {
       "id": "section_1",
-      "title": "段落标题/主题",
-      "content": "段落完整内容",
-      "category": "功能描述|设计说明|技术实现|风险评估|其他",
+      "title": "精确的段落标题",
+      "content": "段落的完整原文内容",
+      "category": "功能需求|设计规范|技术架构|用户体验|数据模型|安全要求|性能指标|测试用例|部署说明|维护指南|其他",
+      "hierarchy_level": 1-5,
+      "word_count": 0,
       "relevance": {
-        "设计缺陷检查": 0-10的相关度评分,
-        "逻辑一致性分析": 0-10的相关度评分,
-        "技术方案建议": 0-10的相关度评分,
-        "风险评估": 0-10的相关度评分
-      }
+        "设计缺陷检查": "评估该段落包含UI/UX设计、交互逻辑、可用性问题的程度（0-10）",
+        "逻辑一致性分析": "评估该段落涉及业务逻辑、数据流、规则一致性的程度（0-10）",
+        "风险评估": "评估该段落涉及技术风险、业务风险、安全隐患的程度（0-10）"
+      },
+      "tags": ["标签1", "标签2"]
     }
   ],
   "metadata": {
     "total_sections": 0,
-    "total_length": 0
+    "total_length": 0,
+    "document_structure": "层次化|模块化|线性",
+    "estimated_complexity": "低|中|高"
   }
 }`;
+
+        const messages = [
+          { role: 'system', content: '你是专业的产品文档质量分析助手。请按阶段逐步分析文档，提供详细、准确的分析结果。' },
+          { role: 'user', content: `阶段1：文档结构分析\n\n${structurePrompt}` }
+        ];
+
+        try {
+          // 第一阶段：获取文档结构
+          console.log('开始阶段1：文档结构分析');
+          const structureResponse = await this.callApiWithMessages(apiUrl, model, messages);
+          const structureData = this.extractJsonFromResponse(structureResponse.content);
+          const processedDoc = this.validateAndFixResultStructure(structureData, text);
+
+          // 第二阶段：设计缺陷检查
+          console.log('开始阶段2：设计缺陷检查');
+          const designSections = this.getRelevantSections(processedDoc, { key: '设计缺陷检查' });
+          const designContent = this.generateContentForAnalysis(designSections, 3000);
+
+          messages.push({ role: 'assistant', content: structureResponse.content });
+          messages.push({
+            role: 'user',
+            content: `阶段2：设计缺陷检查
+
+基于已分析的文档结构，请对设计缺陷进行深入分析：
+
+分析内容：
+${designContent}
+
+请重点关注：
+1. UI/UX设计问题
+2. 交互逻辑缺陷
+3. 用户体验问题
+4. 界面一致性问题
+
+请返回JSON格式：
+{
+  "result": "详细的设计缺陷分析内容，包括发现的问题和改进建议"
+}`
+          });
+
+          const designResponse = await this.callApiWithMessages(apiUrl, model, messages);
+
+          // 第三阶段：逻辑一致性分析
+          console.log('开始阶段3：逻辑一致性分析');
+          const logicSections = this.getRelevantSections(processedDoc, { key: '逻辑一致性分析' });
+          const logicContent = this.generateContentForAnalysis(logicSections, 2500);
+
+          messages.push({ role: 'assistant', content: designResponse.content });
+          messages.push({
+            role: 'user',
+            content: `阶段3：逻辑一致性分析
+
+基于已分析的文档结构和设计缺陷检查结果，请分析文档的逻辑一致性：
+
+分析内容：
+${logicContent}
+
+请重点关注：
+1. 业务逻辑的连贯性
+2. 数据流的一致性
+3. 规则和约束的统一性
+4. 概念定义的一致性
+
+请返回JSON格式：
+{
+  "result": "详细的逻辑一致性分析内容，包括发现的矛盾和不一致问题"
+}`
+          });
+
+          const logicResponse = await this.callApiWithMessages(apiUrl, model, messages);
+
+          // 第四阶段：风险评估
+          console.log('开始阶段4：风险评估');
+          const riskSections = this.getRelevantSections(processedDoc, { key: '风险评估' });
+          const riskContent = this.generateContentForAnalysis(riskSections, 2000);
+
+          messages.push({ role: 'assistant', content: logicResponse.content });
+          messages.push({
+            role: 'user',
+            content: `阶段4：风险评估
+
+基于前面所有分析结果，请进行全面的风险评估：
+
+分析内容：
+${riskContent}
+
+请重点关注：
+1. 技术实现风险
+2. 业务逻辑风险
+3. 安全和合规风险
+4. 性能和扩展性风险
+5. 维护和运营风险
+
+请返回JSON格式：
+{
+  "result": "详细的风险评估内容，包括风险等级、具体风险描述和缓解措施建议"
+}`
+          });
+
+          const riskResponse = await this.callApiWithMessages(apiUrl, model, messages);
+
+          // 解析各阶段结果
+          const designResult = this.extractJsonFromResponse(designResponse.content);
+          const logicResult = this.extractJsonFromResponse(logicResponse.content);
+          const riskResult = this.extractJsonFromResponse(riskResponse.content);
+
+          return {
+            processedDoc,
+            usage: riskResponse.usage, // 使用最后一次调用的usage
+            documentStructure: processedDoc.sections.length > 0
+              ? `📄 文档摘要：${processedDoc.document_summary}\n\n📊 分析结果：共识别${processedDoc.sections.length}个段落\n\n主要段落：\n${
+                  processedDoc.sections.slice(0, 5).map(s => `• ${s.title} (${s.category})`).join('\n')
+                }${processedDoc.sections.length > 5 ? `\n...还有${processedDoc.sections.length - 5}个段落` : ''}`
+              : `📄 文档摘要：${processedDoc.document_summary}\n\n⚠️ 文档段落识别详情：\n• 文档总字符数：${processedDoc.metadata?.total_length || 0}\n• 识别段落数：0\n• 处理方法：传统分块\n\n🔍 可能的原因：\n• PDF文档主要是图片或扫描件\n• 文本内容格式特殊（无明确段落分隔）\n• 文档内容过于简短或不适合结构化分析\n\n💡 建议：\n• 检查PDF是否包含可搜索文本\n• 尝试使用其他文档格式\n• 如果是图片PDF，可能需要OCR处理`,
+            '设计缺陷检查': designResult.result || designResponse.content,
+            '逻辑一致性分析': logicResult.result || logicResponse.content,
+            '风险评估': riskResult.result || riskResponse.content
+          };
+
+        } catch (error) {
+          console.error('分阶段分析失败:', error);
+          // 降级到传统分析方法
+          return this.fallbackStagedAnalysis(text);
+        }
+      },
+
+      // 调用API的方法（支持消息历史）
+      async callApiWithMessages(apiUrl, model, messages) {
+        console.log(`callApiWithMessages called with model: ${model}, apiUrl: ${apiUrl}`);
+        const provider = apiProvider.value;
+        let payload;
+
+        if (provider === 'deepseek') {
+          // DeepSeek API的特殊配置
+          payload = {
+            model: model,
+            messages: messages,
+            max_tokens: 4000,
+            temperature: 0.7, // DeepSeek可能不支持0.2
+          };
+        } else {
+          // OpenAI和其他兼容API
+          payload = {
+            model: model,
+            temperature: 0.2,
+            messages: messages,
+            max_tokens: 4000
+          };
+        }
+
+        const headers = {
+          'Content-Type': 'application/json',
+        };
+
+        // 根据提供商设置认证头
+        if (provider === 'custom') {
+          if (apiKey) {
+            headers['Authorization'] = `Bearer ${apiKey}`;
+          }
+        } else {
+          headers['Authorization'] = `Bearer ${apiKey}`;
+        }
+
+        console.log(`Sending API request to ${apiUrl} with payload:`, JSON.stringify(payload, null, 2));
+
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: headers,
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          let errorText = 'Unknown error';
+          try {
+            errorText = await response.text();
+          } catch (e) {
+            errorText = '无法读取错误详情';
+          }
+          console.error('API Error:', response.status, errorText);
+          throw new Error(`API请求失败: ${response.status} - ${errorText}`);
+        }
+
+        const data = await response.json();
+        return {
+          content: data.choices[0].message.content,
+          usage: data.usage
+        };
+      },
+
+      // 从响应中提取JSON结果
+      extractJsonFromResponse(content) {
+        console.log('extractJsonFromResponse input length:', content.length);
+        console.log('extractJsonFromResponse input preview:', content.substring(0, 200));
+        try {
+          let cleaned = content.trim();
+
+          // 多种方式清理markdown代码块
+          // 1. 移除```json标记
+          cleaned = cleaned.replace(/```json\s*/gi, '').replace(/```\s*$/g, '');
+          // 2. 移除其他代码块标记
+          cleaned = cleaned.replace(/```\w*\s*/gi, '').replace(/```\s*$/g, '');
+          // 3. 移除纯```标记
+          cleaned = cleaned.replace(/```\s*/g, '');
+          // 4. 清理前后的空白和换行
+          cleaned = cleaned.trim();
+
+          console.log('extractJsonFromResponse cleaned length:', cleaned.length);
+          console.log('extractJsonFromResponse cleaned preview:', cleaned.substring(0, 200));
+
+          // 尝试找到JSON的开始位置
+          let jsonStart = 0;
+          const firstBrace = cleaned.indexOf('{');
+          const firstBracket = cleaned.indexOf('[');
+
+          if (firstBrace >= 0 || firstBracket >= 0) {
+            if (firstBrace >= 0 && (firstBracket === -1 || firstBrace < firstBracket)) {
+              jsonStart = firstBrace;
+            } else if (firstBracket >= 0) {
+              jsonStart = firstBracket;
+            }
+          }
+
+          if (jsonStart > 0) {
+            cleaned = cleaned.substring(jsonStart);
+          }
+
+          // 查找JSON结束位置（匹配的括号）
+          let braceCount = 0;
+          let bracketCount = 0;
+          let inString = false;
+          let escapeNext = false;
+          let endPos = -1;
+
+          for (let i = 0; i < cleaned.length; i++) {
+            const char = cleaned[i];
+
+            if (escapeNext) {
+              escapeNext = false;
+              continue;
+            }
+
+            if (char === '\\') {
+              escapeNext = true;
+              continue;
+            }
+
+            if (char === '"') {
+              inString = !inString;
+              continue;
+            }
+
+            if (!inString) {
+              if (char === '{') braceCount++;
+              else if (char === '}') braceCount--;
+              else if (char === '[') bracketCount++;
+              else if (char === ']') bracketCount--;
+
+              // 当所有括号都匹配时，找到结束位置
+              if (braceCount === 0 && bracketCount === 0 && (char === '}' || char === ']')) {
+                endPos = i + 1;
+                break;
+              }
+            }
+          }
+
+          if (endPos > 0) {
+            cleaned = cleaned.substring(0, endPos);
+          }
+
+          // 最后清理一次
+          cleaned = cleaned.trim();
+
+          console.log('extractJsonFromResponse final length:', cleaned.length);
+          console.log('extractJsonFromResponse final preview:', cleaned.substring(0, 200));
+          console.log('extractJsonFromResponse final end:', cleaned.substring(cleaned.length - 200));
+
+          return JSON.parse(cleaned);
+        } catch (e) {
+          console.warn('JSON提取失败，返回原始内容:', e);
+          console.warn('Error details:', e.message);
+          console.warn('Failed content preview:', content.substring(6400, 6500)); // 错误位置附近的内容
+          return { result: content };
+        }
+      },
+
+      // 降级分析方法（当分阶段分析失败时使用）
+      async fallbackStagedAnalysis(text) {
+        console.log('使用降级分析方法');
+
+        // 先进行文档结构分析
+        const processedDoc = await this.analyzeDocumentStructure(text);
+
+        // 获取正确的模型配置
+        const provider = apiProvider.value;
+        let model = 'gpt-4o-mini'; // 默认OpenAI
+        let temperature = 0.2;
+
+        if (provider === 'deepseek') {
+          model = 'deepseek-chat';
+          temperature = 0.7;
+        } else if (provider === 'custom') {
+          model = customModel.value;
+        }
+
+        // 然后逐个进行分析（使用原来的方法）
+        const results = {
+          processedDoc,
+          documentStructure: `📄 文档摘要：${processedDoc.document_summary}\n\n📊 分析结果：共识别${processedDoc.sections.length}个段落，包括：\n${
+            processedDoc.sections.map(s => `• ${s.title} (${s.category})`).join('\n')
+          }`
+        };
+
+        // 逐个分析
+        for (const analysisType of analysisTypes) {
+          try {
+            const sections = this.getRelevantSections(processedDoc, analysisType);
+            const content = this.generateContentForAnalysis(sections, analysisType.maxContentLength);
+
+            const payload = {
+              model: model,
+              temperature: temperature,
+              messages: [
+                { role: 'system', content: '你是产品文档审查助手，请只输出纯JSON格式，不要包含任何markdown代码块。' },
+                { role: 'user', content: `${analysisType.prompt}\n\n文档片段:\n${content}\n\n请返回：{"result": "详细分析内容"}` }
+              ]
+            };
+
+            const response = await this.callApiWithPayload(payload);
+            const parsed = this.extractJsonFromResponse(response.content);
+
+            results[analysisType.key] = parsed.result || response.content;
+            if (response.usage) {
+              results.usage = response.usage;
+            }
+          } catch (e) {
+            results[analysisType.key] = `分析失败: ${e.message}`;
+          }
+        }
+
+        return results;
+      },
+
+      // 调用API的方法（兼容原有payload格式）
+      async callApiWithPayload(payload) {
+        const provider = apiProvider.value;
+        let apiUrl = 'https://api.openai.com/v1/chat/completions';
+        let requestPayload = { ...payload };
+
+        if (provider === 'deepseek') {
+          apiUrl = 'https://api.deepseek.com/v1/chat/completions';
+          // DeepSeek可能不支持某些参数，调整payload
+          requestPayload = {
+            model: payload.model,
+            messages: payload.messages,
+            max_tokens: payload.max_tokens || 4000,
+            // 移除可能不支持的参数
+            temperature: payload.temperature || 0.7,
+          };
+        } else if (provider === 'custom') {
+          apiUrl = customApiUrl.value;
+          // 自定义API保持原始payload
+          requestPayload = payload;
+        }
+
+        const headers = {
+          'Content-Type': 'application/json',
+        };
+
+        // 根据提供商设置认证头
+        if (provider === 'custom') {
+          // 自定义API可能使用不同的认证方式
+          if (apiKey) {
+            headers['Authorization'] = `Bearer ${apiKey}`;
+          }
+        } else {
+          // OpenAI和DeepSeek标准认证
+          headers['Authorization'] = `Bearer ${apiKey}`;
+        }
+
+        console.log(`callApiWithPayload sending request to ${apiUrl} with payload:`, JSON.stringify(requestPayload, null, 2));
+
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: headers,
+          body: JSON.stringify(requestPayload),
+        });
+
+        if (!response.ok) {
+          let errorText = 'Unknown error';
+          try {
+            errorText = await response.text();
+          } catch (e) {
+            errorText = '无法读取错误详情';
+          }
+          console.error('API Error:', response.status, errorText);
+          throw new Error(`API请求失败: ${response.status} - ${errorText}`);
+        }
+
+        const data = await response.json();
+        return {
+          content: data.choices[0].message.content,
+          usage: data.usage
+        };
+      },
+
+      // 使用AI分析文档结构并分块
+      async analyzeDocumentStructure(text) {
+        const analysisPrompt = `请作为专业的产品文档分析师，深度分析以下文档内容，为后续精确的质量分析做准备。请重点关注文档的逻辑结构、内容完整性和潜在问题点。
+
+分析要求：
+1. 识别文档的核心章节和逻辑层次结构
+2. 将内容划分为有意义的功能模块或主题段落
+3. 为每个段落提供精确的分类标签
+4. 评估段落对不同质量分析维度的相关性（0-10分）
+5. 考虑文档的上下文关系和依赖性
+
+文档内容：
+${text.substring(0, 10000)}
+
+请返回精确的JSON结构：
+{
+  "document_summary": "文档整体摘要（150字以内，包含文档类型、主要功能、关键特点）",
+  "document_type": "产品需求文档|技术设计文档|用户手册|其他",
+  "sections": [
+    {
+      "id": "section_1",
+      "title": "精确的段落标题",
+      "content": "段落的完整原文内容",
+      "category": "功能需求|设计规范|技术架构|用户体验|数据模型|安全要求|性能指标|测试用例|部署说明|维护指南|其他",
+      "hierarchy_level": 1-5,
+      "parent_section": "父段落ID（如果有）",
+      "word_count": 0,
+      "relevance": {
+        "设计缺陷检查": "评估该段落包含UI/UX设计、交互逻辑、可用性问题的程度（0-10）",
+        "逻辑一致性分析": "评估该段落涉及业务逻辑、数据流、规则一致性的程度（0-10）",
+        "风险评估": "评估该段落涉及技术风险、业务风险、安全隐患的程度（0-10）"
+      },
+      "tags": ["标签1", "标签2"],
+      "dependencies": ["相关段落ID数组"]
+    }
+  ],
+  "metadata": {
+    "total_sections": 0,
+    "total_length": 0,
+    "document_structure": "层次化|模块化|线性",
+    "quality_focus_areas": ["重点质量分析领域"],
+    "estimated_complexity": "低|中|高"
+  }
+}
+
+请确保：
+- 段落划分具有逻辑完整性，不要随意截断
+- 分类标签准确反映段落内容特征
+- 相关性评分基于实际内容分析，而非主观判断
+- 考虑文档的完整性和上下文关系`;
 
         const provider = apiProvider.value;
         let apiUrl = 'https://api.openai.com/v1/chat/completions';
@@ -337,6 +821,9 @@ ${text.substring(0, 8000)}
           ],
         };
 
+        let data = null;
+        let contentStr = '';
+        
         try {
           const response = await fetch(apiUrl, {
             method: 'POST',
@@ -351,8 +838,8 @@ ${text.substring(0, 8000)}
             throw new Error(`文档分析失败: ${response.status}`);
           }
 
-          const data = await response.json();
-          let contentStr = data.choices[0].message.content;
+          data = await response.json();
+          contentStr = data.choices[0].message.content;
 
           // 清理可能的markdown代码块格式
           if (contentStr.startsWith('```json')) {
@@ -372,20 +859,18 @@ ${text.substring(0, 8000)}
         } catch (error) {
           console.error('AI文档分析失败:', error);
           // 如果是JSON解析错误，尝试降级处理
-          if (error instanceof SyntaxError && error.message.includes('JSON')) {
+          if (error instanceof SyntaxError && error.message.includes('JSON') && data && contentStr) {
             console.warn('尝试修复JSON解析错误...');
             try {
-              // 再次尝试清理并解析
-              let fixedContent = data.choices[0].message.content;
-              // 更激进的清理
-              fixedContent = fixedContent.replace(/```json\s*/g, '').replace(/```\s*$/g, '');
-              fixedContent = fixedContent.replace(/```\w*\s*/g, '').replace(/```\s*$/g, '');
-              fixedContent = fixedContent.trim();
-
+              let fixedContent = this.repairJsonString(contentStr);
               const result = JSON.parse(fixedContent);
               console.log('JSON解析修复成功');
+
+              // 验证和补全必需的属性结构
+              const validatedResult = this.validateAndFixResultStructure(result, text);
+
               return {
-                ...result,
+                ...validatedResult,
                 usage: data.usage,
                 originalText: text
               };
@@ -400,29 +885,55 @@ ${text.substring(0, 8000)}
 
       // 降级方案：传统分块方法
       fallbackChunking(text) {
-        const paragraphs = text.split('\n\n').filter(p => p.trim().length > 100);
+        console.log('fallbackChunking input text length:', text.length);
+        console.log('fallbackChunking input text preview:', text.substring(0, 300));
+
+        // 尝试多种分割方式
+        let paragraphs = text.split('\n\n').filter(p => p.trim().length > 50); // 降低阈值
+        console.log('After \\n\\n split, paragraphs count:', paragraphs.length);
+
+        // 如果还是没有足够的段落，尝试其他分割方式
+        if (paragraphs.length < 2) {
+          paragraphs = text.split('\n').filter(p => p.trim().length > 50);
+          console.log('After \\n split, paragraphs count:', paragraphs.length);
+        }
+
+        // 如果仍然没有，尝试按句子分割
+        if (paragraphs.length < 2) {
+          paragraphs = text.split(/[.!?]+/).filter(p => p.trim().length > 50);
+          console.log('After sentence split, paragraphs count:', paragraphs.length);
+        }
+
         const chunks = [];
         let currentChunk = '';
         let sectionId = 1;
 
-        for (const paragraph of paragraphs) {
-          if ((currentChunk + paragraph).length > 2000 && currentChunk.length > 0) {
+        console.log('Processing paragraphs...');
+        for (let i = 0; i < paragraphs.length; i++) {
+          const paragraph = paragraphs[i].trim();
+          console.log(`Paragraph ${i}: length=${paragraph.length}, preview=${paragraph.substring(0, 100)}`);
+
+          if ((currentChunk + paragraph).length > 1500 && currentChunk.length > 0) {
             chunks.push({
               id: `fallback_${sectionId}`,
               title: `文档段落 ${sectionId}`,
               content: currentChunk.trim(),
-              category: '其他',
+              category: '文档内容',
+              hierarchy_level: 1,
+              word_count: currentChunk.trim().split(/\s+/).length,
+              tags: ['文档内容'],
+              dependencies: [],
               relevance: {
                 '设计缺陷检查': 5,
                 '逻辑一致性分析': 5,
-                '技术方案建议': 5,
                 '风险评估': 5
               }
             });
+            console.log(`Created chunk ${sectionId} with length ${currentChunk.length}`);
             sectionId++;
             currentChunk = paragraph;
           } else {
-            currentChunk += '\n\n' + paragraph;
+            currentChunk += (currentChunk ? '\n\n' : '') + paragraph;
           }
         }
 
@@ -431,50 +942,390 @@ ${text.substring(0, 8000)}
             id: `fallback_${sectionId}`,
             title: `文档段落 ${sectionId}`,
             content: currentChunk.trim(),
-            category: '其他',
+            category: '文档内容',
+            hierarchy_level: 1,
+            word_count: currentChunk.trim().split(/\s+/).length,
+            tags: ['文档内容'],
+            dependencies: [],
             relevance: {
               '设计缺陷检查': 5,
               '逻辑一致性分析': 5,
-              '技术方案建议': 5,
               '风险评估': 5
             }
           });
+          console.log(`Created final chunk ${sectionId} with length ${currentChunk.length}`);
+        }
+
+        console.log(`Total chunks created: ${chunks.length}`);
+
+        // 如果没有找到段落，根据文本内容创建合理的段落
+        if (chunks.length === 0 && text.trim().length > 0) {
+          const trimmedText = text.trim();
+
+          if (trimmedText.length < 200) {
+            // 文本很短，整个作为一段
+            chunks.push({
+              id: 'fallback_1',
+              title: '文档内容',
+              content: trimmedText,
+              category: '文档内容',
+              hierarchy_level: 1,
+              word_count: trimmedText.split(/\s+/).length,
+              tags: ['短文档'],
+              dependencies: [],
+              relevance: {
+                '设计缺陷检查': 3,
+                '逻辑一致性分析': 3,
+                '风险评估': 3
+              }
+            });
+          } else {
+            // 文本较长，分成几段
+            const words = trimmedText.split(/\s+/);
+            const chunkSize = Math.ceil(words.length / 3); // 分成3段
+
+            for (let i = 0; i < 3; i++) {
+              const start = i * chunkSize;
+              const end = Math.min((i + 1) * chunkSize, words.length);
+              const chunkWords = words.slice(start, end);
+              const chunkContent = chunkWords.join(' ');
+
+              if (chunkContent.trim()) {
+                chunks.push({
+                  id: `fallback_${i + 1}`,
+                  title: `文档部分 ${i + 1}`,
+                  content: chunkContent,
+                  category: '文档内容',
+                  hierarchy_level: 1,
+                  word_count: chunkWords.length,
+                  tags: ['文档内容', `部分${i + 1}`],
+                  dependencies: [],
+                  relevance: {
+                    '设计缺陷检查': 5,
+                    '逻辑一致性分析': 5,
+                    '风险评估': 5
+                  }
+                });
+              }
+            }
+          }
+        }
+
+        let summary;
+        if (chunks.length === 0) {
+          if (text.trim().length === 0) {
+            summary = '文档内容为空，无法进行分析';
+          } else {
+            summary = `文档包含${text.length}个字符，但无法识别段落结构。可能的原因：PDF主要是图片内容、文本格式特殊、或内容过于简短`;
+          }
+        } else {
+          const totalWords = chunks.reduce((sum, chunk) => sum + chunk.word_count, 0);
+          summary = `文档已解析为${chunks.length}个段落，共${totalWords}个词。通过传统分块方法进行结构化分析`;
         }
 
         return {
-          document_summary: '文档分析失败，使用传统分块方法',
+          document_summary: summary,
+          document_type: '文档',
           sections: chunks,
           metadata: {
             total_sections: chunks.length,
-            total_length: text.length
+            total_length: text.length,
+            document_structure: '传统分块',
+            quality_focus_areas: ['设计缺陷检查', '逻辑一致性分析', '风险评估'],
+            estimated_complexity: '中'
           },
           usage: null,
           originalText: text
         };
       },
 
-      // 根据分析类型选择最相关的段落
+      // 修复损坏的JSON字符串
+      repairJsonString(jsonString) {
+        if (!jsonString || typeof jsonString !== 'string') {
+          return '{}';
+        }
+
+        console.log('开始修复JSON字符串，原始长度:', jsonString.length);
+
+        // 步骤1：清理markdown代码块标记
+        let cleaned = jsonString;
+        cleaned = cleaned.replace(/```json\s*/gi, '').replace(/```\s*$/g, '');
+        cleaned = cleaned.replace(/```\w*\s*/gi, '').replace(/```\s*$/g, '');
+        cleaned = cleaned.trim();
+
+        // 如果清理后为空，返回空对象
+        if (!cleaned) {
+          return '{}';
+        }
+
+        // 步骤2：尝试查找JSON起始位置
+        let startIndex = 0;
+        const firstBrace = cleaned.indexOf('{');
+        const firstBracket = cleaned.indexOf('[');
+
+        if (firstBrace >= 0 || firstBracket >= 0) {
+          if (firstBrace >= 0 && (firstBracket === -1 || firstBrace < firstBracket)) {
+            startIndex = firstBrace;
+          } else if (firstBracket >= 0) {
+            startIndex = firstBracket;
+          }
+        }
+
+        if (startIndex > 0) {
+          cleaned = cleaned.substring(startIndex);
+        }
+
+        // 步骤3：基本结构修复
+        let result = cleaned;
+
+        // 处理未闭合的字符串
+        result = this.fixUnterminatedStrings(result);
+
+        // 处理未闭合的数组和对象
+        result = this.fixUnclosedBrackets(result);
+
+        // 处理缺失的逗号
+        result = this.fixMissingCommas(result);
+
+        console.log('JSON修复完成，最终长度:', result.length);
+        return result;
+      },
+
+      // 修复未终止的字符串
+      fixUnterminatedStrings(str) {
+        const chars = str.split('');
+        let inString = false;
+        let escapeNext = false;
+        let lastQuotePos = -1;
+
+        for (let i = 0; i < chars.length; i++) {
+          const char = chars[i];
+
+          if (escapeNext) {
+            escapeNext = false;
+            continue;
+          }
+
+          if (char === '\\') {
+            escapeNext = true;
+            continue;
+          }
+
+          if (char === '"') {
+            if (!inString) {
+              inString = true;
+              lastQuotePos = i;
+            } else {
+              inString = false;
+              lastQuotePos = -1;
+            }
+          }
+
+          // 如果遇到结构字符但仍在字符串中，可能是未转义的引号问题
+          if (inString && (char === '{' || char === '}' || char === '[' || char === ']' || char === ',')) {
+            // 在当前位置之前插入闭合引号
+            chars.splice(i, 0, '"');
+            inString = false;
+            lastQuotePos = -1;
+            i++; // 跳过刚插入的引号
+          }
+        }
+
+        // 如果最后还在字符串中，关闭它
+        if (inString) {
+          chars.push('"');
+        }
+
+        return chars.join('');
+      },
+
+      // 修复未闭合的括号
+      fixUnclosedBrackets(str) {
+        const chars = str.split('');
+        const stack = [];
+
+        for (let i = 0; i < chars.length; i++) {
+          const char = chars[i];
+
+          if (char === '{' || char === '[') {
+            stack.push({ char, pos: i });
+          } else if (char === '}' || char === ']') {
+            if (stack.length > 0) {
+              const last = stack[stack.length - 1];
+              if ((char === '}' && last.char === '{') || (char === ']' && last.char === '[')) {
+                stack.pop();
+              }
+            }
+          }
+        }
+
+        // 为未闭合的括号添加闭合符号
+        while (stack.length > 0) {
+          const item = stack.pop();
+          if (item.char === '{') {
+            chars.push('}');
+          } else if (item.char === '[') {
+            chars.push(']');
+          }
+        }
+
+        return chars.join('');
+      },
+
+      // 修复缺失的逗号
+      fixMissingCommas(str) {
+        // 这是一个简化的实现，主要处理对象和数组中的逗号问题
+        let result = str;
+
+        // 在对象属性之间添加缺失的逗号
+        result = result.replace(/}(\s*)"/g, '},$1"');
+        result = result.replace(/](\s*)"/g, '],$1"');
+        result = result.replace(/}(\s*\{)/g, '},$1');
+        result = result.replace(/](\s*\[)/g, '],$1');
+
+        // 移除末尾多余的逗号
+        result = result.replace(/,(\s*[}\]])/g, '$1');
+
+        return result;
+      },
+
+      // 验证和修复结果对象结构
+      validateAndFixResultStructure(result, originalText) {
+        if (!result || typeof result !== 'object') {
+          return this.fallbackChunking(originalText);
+        }
+
+        // 确保基本属性存在
+        const validated = { ...result };
+
+        // 验证 document_summary
+        if (!validated.document_summary || typeof validated.document_summary !== 'string') {
+          validated.document_summary = validated.sections && validated.sections.length > 0
+            ? `成功识别文档结构，包含${validated.sections.length}个主要段落`
+            : '文档结构分析完成，但未识别到明确的段落结构';
+        }
+
+        // 验证 document_type
+        if (!validated.document_type || typeof validated.document_type !== 'string') {
+          validated.document_type = '产品文档';
+        }
+
+        // 验证 sections
+        if (!Array.isArray(validated.sections)) {
+          validated.sections = [];
+        }
+
+        // 验证和修复 sections 中的每个项目
+        validated.sections = validated.sections.map((section, index) => {
+          if (!section || typeof section !== 'object') {
+            return {
+              id: `recovered_${index + 1}`,
+              title: `恢复的段落 ${index + 1}`,
+              content: '内容不可用',
+              category: '其他',
+              hierarchy_level: 1,
+              word_count: 0,
+              tags: [],
+              dependencies: [],
+              relevance: {
+                '设计缺陷检查': 5,
+                '逻辑一致性分析': 5,
+                '风险评估': 5
+              }
+            };
+          }
+
+          return {
+            id: section.id || `section_${index + 1}`,
+            title: section.title || `段落 ${index + 1}`,
+            content: section.content || '',
+            category: section.category || '其他',
+            hierarchy_level: section.hierarchy_level || 1,
+            parent_section: section.parent_section || null,
+            word_count: section.word_count || (section.content ? section.content.split(/\s+/).length : 0),
+            tags: Array.isArray(section.tags) ? section.tags : [],
+            dependencies: Array.isArray(section.dependencies) ? section.dependencies : [],
+            relevance: section.relevance || {
+              '设计缺陷检查': 5,
+              '逻辑一致性分析': 5,
+              '风险评估': 5
+            }
+          };
+        });
+
+        // 验证 metadata
+        if (!validated.metadata || typeof validated.metadata !== 'object') {
+          validated.metadata = {};
+        }
+
+        // 确保 metadata 有必需的属性
+        validated.metadata.total_sections = validated.metadata.total_sections || validated.sections.length;
+        validated.metadata.total_length = validated.metadata.total_length || originalText.length;
+        validated.metadata.document_structure = validated.metadata.document_structure || '模块化';
+        validated.metadata.quality_focus_areas = Array.isArray(validated.metadata.quality_focus_areas)
+          ? validated.metadata.quality_focus_areas
+          : ['设计缺陷检查', '逻辑一致性分析', '风险评估'];
+        validated.metadata.estimated_complexity = validated.metadata.estimated_complexity || '中';
+
+        return validated;
+      },
+
+      // 根据分析类型选择最相关的段落（增强版）
       getRelevantSections(processedDoc, analysisType) {
         const { sections } = processedDoc;
         const analysisKey = analysisType.key;
 
-        // 按相关度排序
-        const sortedSections = sections
+        // 1. 首先按相关度评分排序
+        let sortedSections = sections
           .filter(section => section.relevance && section.relevance[analysisKey] > 0)
           .sort((a, b) => (b.relevance[analysisKey] || 0) - (a.relevance[analysisKey] || 0));
 
-        // 选择前3个最相关的段落
-        const topSections = sortedSections.slice(0, 3);
+        // 2. 如果相关段落不足，考虑类别匹配
+        if (sortedSections.length < 3) {
+          const categoryBoosts = {
+            '设计缺陷检查': ['功能需求', '设计规范', '用户体验'],
+            '逻辑一致性分析': ['功能需求', '数据模型', '业务逻辑'],
+            '风险评估': ['安全要求', '性能指标', '技术架构']
+          };
 
-        // 如果没有找到足够的相关段落，补充一些通用段落
-        if (topSections.length < 2) {
-          const generalSections = sections
-            .filter(section => !topSections.includes(section))
-            .slice(0, 2 - topSections.length);
-          topSections.push(...generalSections);
+          const relevantCategories = categoryBoosts[analysisKey] || [];
+          const categorySections = sections
+            .filter(section =>
+              !sortedSections.includes(section) &&
+              relevantCategories.includes(section.category)
+            )
+            .map(section => ({ ...section, relevance_score: (section.relevance[analysisKey] || 0) + 2 }));
+
+          sortedSections = [...sortedSections, ...categorySections]
+            .sort((a, b) => (b.relevance_score || b.relevance[analysisKey] || 0) - (a.relevance_score || a.relevance[analysisKey] || 0));
         }
 
-        return topSections;
+        // 3. 选择前3个最相关的段落
+        const topSections = sortedSections.slice(0, 3);
+
+        // 4. 考虑依赖关系，添加相关联的段落
+        const enhancedSections = [...topSections];
+        topSections.forEach(section => {
+          if (section.dependencies && Array.isArray(section.dependencies)) {
+            section.dependencies.forEach(depId => {
+              const depSection = sections.find(s => s.id === depId);
+              if (depSection && !enhancedSections.includes(depSection)) {
+                enhancedSections.push(depSection);
+              }
+            });
+          }
+        });
+
+        // 5. 如果仍然不足，补充一些通用段落
+        if (enhancedSections.length < 2) {
+          const generalSections = sections
+            .filter(section => !enhancedSections.includes(section))
+            .sort((a, b) => (b.word_count || 0) - (a.word_count || 0)) // 优先选择内容更丰富的段落
+            .slice(0, 2 - enhancedSections.length);
+          enhancedSections.push(...generalSections);
+        }
+
+        return enhancedSections.slice(0, 4); // 最多返回4个段落
       },
 
       // 生成段落组合内容
@@ -509,12 +1360,6 @@ ${text.substring(0, 8000)}
         name: '逻辑一致性分析',
         prompt: '请基于提供的文档片段分析逻辑一致性，检查是否存在矛盾或不一致的地方。',
         maxContentLength: 2500
-      },
-      {
-        key: '技术方案建议',
-        name: '技术方案建议',
-        prompt: '请基于提供的文档片段提出技术实现方案建议。',
-        maxContentLength: 3500
       },
       {
         key: '风险评估',
@@ -615,57 +1460,95 @@ ${text.substring(0, 8000)}
     startBtn.addEventListener('click', async () => {
       if (!canStartAnalysis()) return;
       resetUI();
+
       try {
         logStep(steps[0].label, steps[0].progress);
-        extractedText = await parsePdf(currentFile);
 
-        // AI智能文档结构分析
-        logStep('AI分析文档结构中...', 15);
-        const processedDoc = await documentProcessor.analyzeDocumentStructure(extractedText);
-        updateDocStats(processedDoc);
-        console.log(`AI已分析文档：${processedDoc.sections.length}个段落，总长度：${processedDoc.metadata.total_length}字符`);
+        // 准备API请求数据
+        const formData = new FormData();
+        formData.append('file', currentFile);
+        formData.append('provider', apiProvider.value);
+        formData.append('apiKey', apiKeyInput.value.trim());
 
-        // 初始化结果收集
-        const allResults = {};
-        let totalUsage = processedDoc.usage ? {
-          prompt_tokens: processedDoc.usage.prompt_tokens || 0,
-          completion_tokens: processedDoc.usage.completion_tokens || 0,
-          total_tokens: processedDoc.usage.total_tokens || 0
-        } : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-
-        // 显示预处理结果（文档结构分析）
-        if (processedDoc.document_summary) {
-          allResults['文档结构分析'] = `📄 文档摘要：${processedDoc.document_summary}\n\n📊 分析结果：共识别${processedDoc.sections.length}个段落，包括：\n${
-            processedDoc.sections.map(s => `• ${s.title} (${s.category})`).join('\n')
-          }`;
-          renderTabs(allResults); // 立即显示预处理结果
+        if (apiProvider.value === 'custom') {
+          formData.append('customApiUrl', customApiUrl.value);
+          formData.append('customModel', customModel.value);
         }
 
-        // 逐个分析每个环节
-        for (let i = 0; i < analysisTypes.length; i++) {
-          const analysisType = analysisTypes[i];
+        // 显示API请求预览
+        const previewData = {
+          endpoint: '/api/analyze',
+          method: 'POST',
+          provider: apiProvider.value,
+          file: `${currentFile.name} (${(currentFile.size / 1024 / 1024).toFixed(2)} MB)`,
+          hasApiKey: !!apiKeyInput.value.trim()
+        };
+        apiRequestPreview.textContent = JSON.stringify(previewData, null, 2);
+
+        logStep('正在连接后端服务...', 15);
+
+        // 选择分析模式：流式或标准
+        const useStreaming = true; // 可以根据用户设置或自动选择
+        const apiUrl = useStreaming
+          ? 'http://localhost:3001/api/analyze/stream'
+          : 'http://localhost:3001/api/analyze';
+
+        if (useStreaming) {
+          // 流式分析
+          await performStreamingAnalysis(formData);
+        } else {
+          // 标准分析
+          const response = await fetch(apiUrl, {
+            method: 'POST',
+            body: formData
+          });
+
+          const result = await response.json();
+          if (!result.success) {
+            throw new Error(result.message || '分析失败');
+          }
+
+          processAnalysisResult(result.data);
+        }
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.message || `请求失败: ${response.status}`);
+        }
+
+        const result = await response.json();
+
+        if (!result.success) {
+          throw new Error(result.message || '分析失败');
+        }
+
+        // 处理分析结果
+        const allResults = {};
+        const analysisData = result.data;
+        const totalUsage = analysisData.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+
+        // 显示文档结构分析结果
+        if (analysisData.documentStructure) {
+          allResults['文档结构分析'] = analysisData.documentStructure;
+          updateDocStats(analysisData.processedDoc);
+          renderTabs(allResults);
+        }
+
+        // 显示各分析阶段的结果
+        const analysisStages = ['设计缺陷检查', '逻辑一致性分析', '风险评估'];
+        for (let i = 0; i < analysisStages.length; i++) {
+          const stageName = analysisStages[i];
           const stepIndex = i + 2; // steps[2]开始是第一个分析步骤
 
           logStep(steps[stepIndex].label, steps[stepIndex].progress);
 
-          const payload = buildApiRequest(processedDoc, analysisType);
-          if (i === 0) { // 只显示第一个请求的预览
-            apiRequestPreview.textContent = JSON.stringify(payload, null, 2);
+          if (analysisData[stageName]) {
+            allResults[stageName] = analysisData[stageName];
+          } else {
+            allResults[stageName] = '分析阶段未完成或失败';
           }
 
-          const data = await callApi(payload);
-
-          // 合并结果
-          allResults[analysisType.key] = data.result || data.results?.[analysisType.key] || '分析失败';
-
-          // 累加token使用情况
-          if (data.usage) {
-            totalUsage.prompt_tokens += data.usage.prompt_tokens || 0;
-            totalUsage.completion_tokens += data.usage.completion_tokens || 0;
-            totalUsage.total_tokens += data.usage.total_tokens || 0;
-          }
-
-          // 每个分析完成后立即更新UI
+          // 更新UI显示
           renderTabs(allResults);
           updateTokenUsage(totalUsage.total_tokens > 0 ? totalUsage : null);
         }
@@ -679,7 +1562,7 @@ ${text.substring(0, 8000)}
           usage: totalUsage.total_tokens > 0 ? totalUsage : null,
         };
 
-        logStep(steps[6].label, steps[6].progress, true); // 最后一步
+        logStep(steps[5].label, steps[5].progress, true); // 最后一步
         toggleActions(true);
       } catch (err) {
         console.error('Analysis failed:', err);
@@ -724,56 +1607,29 @@ ${text.substring(0, 8000)}
       testConnectionBtn.textContent = '测试中...';
 
       try {
-        console.log('Testing API connection...');
+        console.log('Testing API connection via backend...');
 
-        const provider = apiProvider.value;
-        let testUrl = 'https://api.openai.com/v1/chat/completions'; // 默认OpenAI
-        let testModel = 'gpt-4o-mini';
-
-        if (provider === 'deepseek') {
-          testUrl = 'https://api.deepseek.com/v1/chat/completions';
-          testModel = 'deepseek-chat';
-        } else if (provider === 'custom') {
-          testUrl = customApiUrl.value;
-          testModel = customModel.value;
-        }
-
-        const testPayload = {
-          model: testModel,
-          messages: [{ role: 'user', content: 'Hello' }],
-          max_tokens: 5
-        };
-
-        const headers = {
-          'Content-Type': 'application/json',
-        };
-
-        if (provider === 'custom') {
-          if (apiKey) {
-            headers['Authorization'] = `Bearer ${apiKey}`;
-          }
-        } else {
-          headers['Authorization'] = `Bearer ${apiKey}`;
-        }
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时用于测试
-
-        const response = await fetch(testUrl, {
+        // 调用后端测试连接API
+        const response = await fetch('http://localhost:3001/api/test-connection', {
           method: 'POST',
-          headers: headers,
-          body: JSON.stringify(testPayload),
-          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            provider: apiProvider.value,
+            apiKey: apiKeyInput.value.trim(),
+            customApiUrl: customApiUrl.value,
+            customModel: customModel.value
+          })
         });
 
-        clearTimeout(timeoutId);
+        const result = await response.json();
 
-        if (response.ok) {
+        if (result.success) {
           alert('✅ 连接测试成功！网络和API密钥都正常。');
           console.log('Connection test successful');
         } else {
-          const errorText = await response.text();
-          throw new Error(`API返回错误 ${response.status}: ${errorText}`);
+          throw new Error(result.message || '连接测试失败');
         }
 
       } catch (err) {
@@ -781,11 +1637,11 @@ ${text.substring(0, 8000)}
 
         let errorMessage = '❌ 连接测试失败：\n\n';
 
-        if (err.name === 'AbortError') {
+        if (err.name === 'AbortError' || err.message.includes('timeout')) {
           errorMessage += '网络请求超时，请检查网络连接';
         } else if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
-          errorMessage += '网络连接失败，可能是：\n• 网络连接问题\n• 防火墙阻止\n• 需要配置代理\n• DNS解析问题';
-        } else if (err.message.includes('401')) {
+          errorMessage += '网络连接失败，可能是：\n• 网络连接问题\n• 后端服务未启动\n• 防火墙阻止\n• DNS解析问题';
+        } else if (err.message.includes('401') || err.message.includes('密钥')) {
           errorMessage += 'API密钥无效，请检查密钥是否正确';
         } else if (err.message.includes('429')) {
           errorMessage += '请求过于频繁，请稍后再试';
@@ -905,9 +1761,14 @@ ${text.substring(0, 8000)}
           ? Math.round(totalLength / sectionCount)
           : 0;
 
-        docLengthEl.textContent = `文档长度: ${totalLength.toLocaleString()} 字符`;
-        chunkCountEl.textContent = `分析段落: ${sectionCount} 个`;
-        avgChunkSizeEl.textContent = `平均段落大小: ${avgSize.toLocaleString()} 字符`;
+        // 显示增强的文档统计信息
+        const docType = processedDoc.document_type || '产品文档';
+        const complexity = processedDoc.metadata.estimated_complexity || '中';
+        const structure = processedDoc.metadata.document_structure || '模块化';
+
+        docLengthEl.textContent = `文档类型: ${docType} | 长度: ${totalLength.toLocaleString()} 字符`;
+        chunkCountEl.textContent = `结构类型: ${structure} | 段落数: ${sectionCount} 个`;
+        avgChunkSizeEl.textContent = `复杂度: ${complexity} | 平均段落大小: ${avgSize.toLocaleString()} 字符`;
         docStatsEl.style.display = 'block';
       } else {
         docStatsEl.style.display = 'none';
@@ -942,16 +1803,144 @@ ${text.substring(0, 8000)}
         throw new Error('PDF.js 库未正确加载，请刷新页面重试');
       }
 
+      console.log('开始解析PDF文件，大小:', file.size, 'bytes');
+
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      console.log('PDF文档页数:', pdf.numPages);
+
       let fullText = '';
+      let totalItems = 0;
+
       for (let i = 1; i <= pdf.numPages; i++) {
+        console.log(`解析第${i}页...`);
         const page = await pdf.getPage(i);
         const content = await page.getTextContent();
-        const strings = content.items.map(item => item.str).join(' ');
-        fullText += `\n[Page ${i}]\n${strings}\n`;
+
+        console.log(`第${i}页文本项数量:`, content.items.length);
+        totalItems += content.items.length;
+
+        // 尝试保留原始的文本结构
+        let pageText = '';
+        let lastY = null;
+        let lineText = '';
+
+        for (const item of content.items) {
+          const text = item.str.trim();
+          if (!text) continue;
+
+          // 如果Y坐标变化很大，可能是新行
+          if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) {
+            if (lineText) {
+              pageText += lineText + '\n';
+              lineText = '';
+            }
+          }
+
+          lineText += (lineText ? ' ' : '') + text;
+          lastY = item.transform[5];
+        }
+
+        if (lineText) {
+          pageText += lineText + '\n';
+        }
+
+        fullText += `\n[Page ${i}]\n${pageText}\n`;
       }
+
+      console.log('PDF解析完成，总文本长度:', fullText.length, '总文本项:', totalItems);
+      console.log('解析结果预览:', fullText.substring(0, 300));
+
+      // 如果文本太短，可能有问题
+      if (fullText.trim().length < 100) {
+        console.warn('警告：解析出的文本内容很少，可能PDF主要是图片或扫描件');
+      }
+
       return fullText;
+    }
+
+    // 流式分析函数
+    async function performStreamingAnalysis(formData) {
+      // 简化实现：暂时使用标准API，稍后实现真正的SSE流式
+      const response = await fetch('http://localhost:3001/api/analyze', {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `请求失败: ${response.status}`);
+      }
+
+      const result = await response.json();
+      if (!result.success) {
+        throw new Error(result.message || '分析失败');
+      }
+
+      processAnalysisResult(result.data);
+    }
+
+    // 处理分析结果
+    function processAnalysisResult(analysisData) {
+      // 处理分析结果
+      const allResults = {};
+      const totalUsage = analysisData.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+
+      // 显示文档结构分析结果
+      if (analysisData.documentStructure) {
+        allResults['文档结构分析'] = analysisData.documentStructure;
+        updateDocStats(analysisData.processedDoc);
+        renderTabs(allResults);
+      }
+
+      // 显示各分析阶段的结果
+      const analysisStages = ['设计缺陷检查', '逻辑一致性分析', '风险评估'];
+      for (let i = 0; i < analysisStages.length; i++) {
+        const stageName = analysisStages[i];
+
+        if (analysisData[stageName]) {
+          allResults[stageName] = analysisData[stageName];
+        } else {
+          allResults[stageName] = '分析阶段未完成或失败';
+        }
+
+        renderTabs(allResults);
+        updateTokenUsage(totalUsage.total_tokens > 0 ? totalUsage : null);
+      }
+
+      // 保存完整结果
+      lastResult = {
+        success: true,
+        analysis_id: crypto.randomUUID(),
+        results: allResults,
+        metadata: { confidence: 0.8 },
+        usage: totalUsage.total_tokens > 0 ? totalUsage : null,
+      };
+
+      logStep(steps[5].label, steps[5].progress, true);
+      toggleActions(true);
+    }
+
+    // 获取阶段显示名称
+    function getStageDisplayName(stage) {
+      const names = {
+        'structure': 'AI分析文档结构',
+        'design': 'AI分析设计缺陷',
+        'logic': 'AI分析逻辑一致性',
+        'risk': 'AI分析风险评估'
+      };
+      return names[stage] || stage;
+    }
+
+    // 获取阶段进度
+    function getStageProgress(stage) {
+      const progresses = {
+        'structure': 15,
+        'design': 40,
+        'logic': 70,
+        'risk': 95
+      };
+      return progresses[stage] || 50;
     }
 
     function buildApiRequest(processedDoc, analysisType) {
@@ -992,139 +1981,6 @@ ${contentToAnalyze}
       };
     }
 
-    async function callApi(payload) {
-      console.log('Starting API call...');
-
-      const provider = apiProvider.value;
-      let apiUrl = 'https://api.openai.com/v1/chat/completions'; // 默认OpenAI
-
-      if (provider === 'deepseek') {
-        apiUrl = 'https://api.deepseek.com/v1/chat/completions';
-      } else if (provider === 'custom') {
-        apiUrl = customApiUrl.value;
-      }
-
-      console.log(`Using API provider: ${provider}, URL: ${apiUrl}`);
-
-      let contentStr = '{}'; // 默认值
-      let usage = null; // 初始化usage变量
-
-      try {
-        // 添加超时控制
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
-
-        const headers = {
-          'Content-Type': 'application/json',
-        };
-
-        // 根据提供商设置认证头
-        if (provider === 'custom') {
-          // 自定义API可能使用不同的认证方式
-          if (apiKey) {
-            headers['Authorization'] = `Bearer ${apiKey}`;
-          }
-        } else {
-          // OpenAI标准认证
-          headers['Authorization'] = `Bearer ${apiKey}`;
-        }
-
-        const response = await fetch(apiUrl, {
-          method: 'POST',
-          headers: headers,
-          body: JSON.stringify(payload),
-          signal: controller.signal,
-        });
-
-        clearTimeout(timeoutId);
-
-        console.log('OpenAI API response received:', response.status);
-
-        if (!response.ok) {
-          let errorText;
-          try {
-            errorText = await response.text();
-          } catch (e) {
-            errorText = '无法读取错误详情';
-          }
-          console.error('OpenAI API error:', response.status, errorText);
-
-          // 根据状态码提供更友好的错误信息
-          let friendlyMessage = '';
-          switch (response.status) {
-            case 401:
-              friendlyMessage = 'API密钥无效或过期，请检查密钥';
-              break;
-            case 403:
-              friendlyMessage = 'API密钥权限不足';
-              break;
-            case 429:
-              friendlyMessage = '请求过于频繁，请稍后再试';
-              break;
-            case 500:
-            case 502:
-            case 503:
-              friendlyMessage = 'OpenAI服务器暂时不可用，请稍后再试';
-              break;
-            default:
-              friendlyMessage = `API请求失败 (${response.status})`;
-          }
-
-          throw new Error(`${friendlyMessage}: ${errorText}`);
-        }
-
-        const data = await response.json();
-        contentStr = data?.choices?.[0]?.message?.content || '{}';
-
-        // 提取token使用情况
-        usage = data?.usage || null;
-
-      } catch (error) {
-        console.error('OpenAI API request failed:', error);
-
-        // 如果是网络错误，重新抛出
-        if (error.name === 'AbortError') {
-          throw new Error('网络请求超时，请检查网络连接');
-        } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
-          throw new Error('网络连接失败，无法连接到OpenAI服务器');
-        } else {
-          // 如果是API错误（比如401、429等），我们已经有contentStr的默认值，继续处理
-          console.log('API returned error but continuing with default content');
-        }
-      }
-
-      try {
-        // 清理可能的markdown代码块格式
-        let cleanContentStr = contentStr.trim();
-
-        // 如果内容以```json开头，去掉代码块标记
-        if (cleanContentStr.startsWith('```json')) {
-          cleanContentStr = cleanContentStr.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-        } else if (cleanContentStr.startsWith('```')) {
-          // 处理其他代码块格式
-          cleanContentStr = cleanContentStr.replace(/^```\s*/, '').replace(/\s*```$/, '');
-        }
-
-        const parsed = JSON.parse(cleanContentStr);
-        return {
-          success: true,
-          analysis_id: crypto.randomUUID(),
-          result: parsed.result || parsed.content || contentStr,
-          confidence: parsed.confidence || 0.8,
-          usage: usage,
-        };
-      } catch (e) {
-        // 如果解析失败，返回基本的结构
-        console.warn('JSON parse failed, using raw content:', e);
-        return {
-          success: true,
-          analysis_id: crypto.randomUUID(),
-          result: contentStr,
-          confidence: 0.6,
-          usage: usage,
-        };
-      }
-    }
 
     let currentResults = {};
 
@@ -1178,7 +2034,6 @@ ${contentToAnalyze}
           '文档结构分析': 'AI正在分析文档结构和分块，请稍候...',
           '设计缺陷检查': '正在检查UI/UX设计和交互逻辑缺陷...',
           '逻辑一致性分析': '正在分析文档逻辑一致性和潜在矛盾...',
-          '技术方案建议': '正在生成技术实现方案建议...',
           '风险评估': '正在评估潜在风险和技术债务...'
         };
 
@@ -1197,7 +2052,6 @@ ${contentToAnalyze}
       const icons = {
         '设计缺陷检查': '🔍',
         '逻辑一致性分析': '🧠',
-        '技术方案建议': '💡',
         '风险评估': '⚠️'
       };
       return icons[key] || '📋';
@@ -1236,8 +2090,6 @@ ${contentToAnalyze}
         html = renderDefectAnalysis(data);
       } else if (key === '逻辑一致性分析') {
         html = renderConsistencyAnalysis(data);
-      } else if (key === '技术方案建议') {
-        html = renderTechnicalSuggestions(data);
       } else if (key === '风险评估') {
         html = renderRiskAssessment(data);
       } else {
@@ -1277,23 +2129,6 @@ ${contentToAnalyze}
         html += `<div class="result-section">
           <h4 class="section-title">⚠️ 潜在冲突</h4>
           <div class="section-content warning">${formatText(data.潜在冲突)}</div>
-        </div>`;
-      }
-      return html || renderDefaultStructure(data);
-    }
-
-    function renderTechnicalSuggestions(data) {
-      let html = '';
-      if (data.推荐方案) {
-        html += `<div class="result-section">
-          <h4 class="section-title">💡 推荐技术方案</h4>
-          <div class="section-content">${formatText(data.推荐方案)}</div>
-        </div>`;
-      }
-      if (data.优势) {
-        html += `<div class="result-section">
-          <h4 class="section-title">✅ 方案优势</h4>
-          <div class="section-content success">${formatText(data.优势)}</div>
         </div>`;
       }
       return html || renderDefaultStructure(data);
