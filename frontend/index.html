@@ -1511,22 +1511,6 @@ ${text.substring(0, 10000)}
           processAnalysisResult(result.data);
         }
 
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.message || `请求失败: ${response.status}`);
-        }
-
-        const result = await response.json();
-
-        if (!result.success) {
-          throw new Error(result.message || '分析失败');
-        }
-
-        // 处理分析结果
-        const allResults = {};
-        const analysisData = result.data;
-        const totalUsage = analysisData.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-
         // 显示文档结构分析结果
         if (analysisData.documentStructure) {
           allResults['文档结构分析'] = analysisData.documentStructure;
@@ -1861,23 +1845,315 @@ ${text.substring(0, 10000)}
 
     // 流式分析函数
     async function performStreamingAnalysis(formData) {
-      // 简化实现：暂时使用标准API，稍后实现真正的SSE流式
-      const response = await fetch('http://localhost:3001/api/analyze', {
-        method: 'POST',
-        body: formData
+      console.log('开始执行performStreamingAnalysis');
+      return new Promise(async (resolve, reject) => {
+        try {
+          // 显示流式分析状态
+          logStep('正在启动流式分析...', 5);
+          console.log('显示流式状态');
+
+          // 创建流式显示容器
+          createStreamingDisplay();
+          console.log('创建流式显示容器');
+
+          // 启动流式分析请求
+          console.log('开始发送流式分析请求到: http://localhost:3001/api/analyze/stream');
+          console.log('FormData内容:', Array.from(formData.entries()));
+
+          const analysisPromise = fetch('http://localhost:3001/api/analyze/stream', {
+            method: 'POST',
+            body: formData,
+            signal: AbortSignal.timeout(30000) // 30秒超时
+          }).then(async (response) => {
+            console.log('收到响应:', {
+              ok: response.ok,
+              status: response.status,
+              statusText: response.statusText,
+              headers: Object.fromEntries(response.headers.entries())
+            });
+            if (!response.ok) {
+              let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+              try {
+                const errorData = await response.text();
+                console.log('错误响应内容:', errorData);
+                errorMessage += ` - ${errorData}`;
+              } catch (e) {
+                console.log('无法读取错误响应内容');
+              }
+              throw new Error(errorMessage);
+            }
+
+            // 检查是否支持ReadableStream
+            if (!response.body || typeof response.body.getReader !== 'function') {
+              console.warn('浏览器不支持ReadableStream，降级处理...');
+              // 降级为非流式处理
+              const result = await response.json();
+              if (!result.success) {
+                throw new Error(result.message || '分析失败');
+              }
+
+              // 模拟流式进度
+              const stages = ['structure', 'design', 'logic', 'risk'];
+              for (let i = 0; i < stages.length; i++) {
+                const stage = stages[i];
+                const progress = getStageProgress(stage);
+                logStep(`${getStageDisplayName(stage)}完成`, progress);
+                updateStreamingContent(stage, `正在进行${getStageDisplayName(stage)}...`);
+                await new Promise(resolve => setTimeout(resolve, 1000)); // 模拟延迟
+              }
+
+              logStep('✅ 分析完成！', 100, true);
+              updateStreamingContent('complete', '🎉 分析完成，显示完整结果');
+
+              setTimeout(() => {
+                processAnalysisResult(result.data);
+                removeStreamingDisplay();
+              }, 1500);
+
+              return {
+                success: true,
+                data: result.data,
+                usage: result.usage
+              };
+            }
+
+            return new Promise((resolve, reject) => {
+              let buffer = '';
+              let allResults = {};
+              let totalUsage = { total_tokens: 0 };
+
+              console.log('响应对象:', {
+                ok: response.ok,
+                status: response.status,
+                headers: Object.fromEntries(response.headers.entries()),
+                bodyUsed: response.bodyUsed,
+                hasBody: !!response.body
+              });
+
+              const reader = response.body.getReader();
+              const decoder = new TextDecoder();
+              console.log('创建了ReadableStream reader');
+
+              function processStream() {
+                reader.read().then(({ done, value }) => {
+                  if (done) {
+                    console.log('流式响应完成');
+                    resolve({
+                      success: true,
+                      data: allResults,
+                      usage: totalUsage
+                    });
+                    return;
+                  }
+
+                  const chunk = decoder.decode(value, { stream: true });
+                  console.log('收到流式数据块:', chunk.length, '字符');
+                  buffer += chunk;
+                  const lines = buffer.split('\n');
+
+                  // 保留不完整的行
+                  buffer = lines.pop();
+                  console.log('缓冲区剩余:', buffer.length, '字符');
+
+                  for (const line of lines) {
+                    console.log('处理行:', line.substring(0, 100));
+                    if (line.startsWith('data: ')) {
+                      const dataStr = line.slice(6).trim();
+                      if (dataStr === '[DONE]') {
+                        resolve({
+                          success: true,
+                          data: allResults,
+                          usage: totalUsage
+                        });
+                        return;
+                      }
+
+                      try {
+                        console.log('解析流式数据:', dataStr.substring(0, 200));
+                        const data = JSON.parse(dataStr);
+                        console.log('成功解析数据:', { stage: data.stage, hasChunk: !!data.chunk, hasCompleted: !!data.completed });
+
+                        if (data.stage === 'complete') {
+                          // 分析完成
+                          allResults = data.results;
+
+                          // 显示最终结果
+                          logStep('✅ 分析完成！', 100, true);
+                          updateStreamingContent('complete', '🎉 分析完成，显示完整结果');
+
+                          // 延迟一下显示完整结果，让用户看到完成状态
+                          setTimeout(() => {
+                            processAnalysisResult(allResults);
+                            removeStreamingDisplay();
+                            resolve({
+                              success: true,
+                              data: allResults,
+                              usage: totalUsage
+                            });
+                          }, 1500);
+
+                        } else if (data.completed) {
+                          // 阶段完成
+                          const stageName = data.stage.replace('_complete', '');
+                          const stageDisplayName = getStageDisplayName(stageName);
+                          const progress = getStageProgress(stageName);
+
+                          if (stageName === 'structure') {
+                            // 文档结构分析完成，显示摘要信息
+                            const sectionCount = data.sectionCount || 0;
+                            updateStreamingContent(stageName, `文档结构分析完成，发现 ${sectionCount} 个段落`);
+                          }
+
+                          logStep(`${stageDisplayName}完成`, progress);
+                        } else if (data.chunk) {
+                          // 实时内容更新 - 检查内容是否适合显示
+                          let displayContent = data.chunk;
+
+                          if (data.stage === 'structure') {
+                            // 结构分析阶段显示友好文本
+                            displayContent = '正在分析文档结构，识别章节和段落层次...';
+                          } else if (data.chunk.trim().startsWith('{') || data.chunk.trim().startsWith('[')) {
+                            // 如果是JSON格式，显示友好文本
+                            const stageMessages = {
+                              'design': '正在检查UI/UX设计规范和交互逻辑...',
+                              'logic': '正在分析业务逻辑连贯性和数据流一致性...',
+                              'risk': '正在评估技术风险和安全隐患...'
+                            };
+                            displayContent = stageMessages[data.stage] || `正在进行${getStageDisplayName(data.stage)}...`;
+                          }
+
+                          updateStreamingContent(data.stage, displayContent);
+                        }
+                      } catch (error) {
+                        console.error('解析流式数据失败:', error, '原始数据:', dataStr);
+                      }
+                    }
+                  }
+
+                  processStream();
+                }).catch(reject);
+              }
+
+              processStream();
+            });
+          });
+
+        } catch (error) {
+          console.error('流式分析失败:', error);
+          console.error('错误类型:', error.constructor.name);
+          console.error('错误详情:', error);
+
+          // 显示错误信息而不是移除显示
+          let errorMsg = error.message;
+          if (error.name === 'AbortError') {
+            errorMsg = '请求超时，请检查网络连接或后端服务状态';
+          } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+            errorMsg = '网络连接失败，请确保后端服务正在运行 (localhost:3001)';
+          }
+
+          updateStreamingContent('error', `分析失败：${errorMsg}`);
+          setTimeout(() => {
+            removeStreamingDisplay();
+            reject(error);
+          }, 5000); // 延长显示时间让用户看到错误信息
+        }
       });
+    }
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `请求失败: ${response.status}`);
+    // 创建流式显示容器
+    function createStreamingDisplay() {
+      // 创建流式显示区域
+      const streamingContainer = document.createElement('div');
+      streamingContainer.id = 'streaming-display';
+      streamingContainer.style.cssText = `
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0, 0, 0, 0.9);
+        color: white;
+        padding: 30px;
+        border-radius: 15px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        z-index: 10000;
+        max-width: 500px;
+        text-align: center;
+        font-family: 'Arial', sans-serif;
+      `;
+
+      streamingContainer.innerHTML = `
+        <div style="margin-bottom: 20px;">
+          <div style="font-size: 24px; margin-bottom: 10px;">🤖 AI 正在分析中...</div>
+          <div id="streaming-stage" style="font-size: 18px; color: #4ade80; margin-bottom: 15px;">准备开始</div>
+          <div id="streaming-content" style="font-size: 14px; line-height: 1.6; color: #e5e7eb; min-height: 60px;">
+            初始化分析环境...
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; justify-content: center; gap: 10px;">
+          <div id="streaming-spinner" style="width: 20px; height: 20px; border: 2px solid #374151; border-top: 2px solid #4ade80; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+          <div style="font-size: 12px; color: #9ca3af;">请耐心等待</div>
+        </div>
+        <style>
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+          @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
+          @keyframes fadeOut {
+            from { opacity: 1; transform: scale(1); }
+            to { opacity: 0; transform: scale(0.9); }
+          }
+        </style>
+      `;
+
+      document.body.appendChild(streamingContainer);
+    }
+
+    // 更新流式内容显示
+    function updateStreamingContent(stage, content) {
+      const streamingContainer = document.getElementById('streaming-display');
+      if (!streamingContainer) return;
+
+      const stageElement = document.getElementById('streaming-stage');
+      const contentElement = document.getElementById('streaming-content');
+
+      if (stageElement && contentElement) {
+        // 更新阶段显示
+        const stageNames = {
+          'structure': '📄 文档结构分析',
+          'design': '🎨 设计缺陷检查',
+          'logic': '🧠 逻辑一致性分析',
+          'risk': '⚠️ 风险评估',
+          'complete': '✅ 分析完成'
+        };
+
+        stageElement.textContent = stageNames[stage] || stage;
+        contentElement.textContent = content;
+
+        // 添加一些动画效果
+        contentElement.style.animation = 'fadeIn 0.5s ease-in';
+        setTimeout(() => {
+          contentElement.style.animation = '';
+        }, 500);
       }
 
-      const result = await response.json();
-      if (!result.success) {
-        throw new Error(result.message || '分析失败');
-      }
+      console.log(`[${stage}] ${content}`);
+    }
 
-      processAnalysisResult(result.data);
+    // 移除流式显示容器
+    function removeStreamingDisplay() {
+      const streamingContainer = document.getElementById('streaming-display');
+      if (streamingContainer) {
+        streamingContainer.style.animation = 'fadeOut 0.5s ease-out';
+        setTimeout(() => {
+          if (streamingContainer.parentNode) {
+            streamingContainer.parentNode.removeChild(streamingContainer);
+          }
+        }, 500);
+      }
     }
 
     // 处理分析结果

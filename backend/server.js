@@ -114,13 +114,20 @@ app.post('/api/analyze', upload.single('file'), async (req, res) => {
     const extractedText = await documentProcessor.parsePdf(req.file.buffer);
     console.log(`PDF解析完成，文本长度: ${extractedText.length}`);
 
-    // AI分阶段分析
+    // AI分阶段分析（使用流式）
     const analysisResults = await documentProcessor.performStagedAnalysis(
       extractedText,
       provider,
       apiKey,
       customApiUrl,
-      customModel
+      customModel,
+      {
+        stream: true,
+        onProgress: (stage, chunk, fullContent) => {
+          // 对于普通API，我们不需要实时进度反馈
+          console.log(`阶段 ${stage}: ${chunk ? '接收数据中...' : '阶段完成'}`);
+        }
+      }
     );
 
     res.json({
@@ -141,6 +148,14 @@ app.post('/api/analyze', upload.single('file'), async (req, res) => {
 
 // 文档分析（流式模式）
 app.post('/api/analyze/stream', upload.single('file'), async (req, res) => {
+  console.log('收到流式分析请求');
+  console.log('请求体字段:', Object.keys(req.body));
+  console.log('文件信息:', req.file ? {
+    originalname: req.file.originalname,
+    size: req.file.size,
+    mimetype: req.file.mimetype
+  } : '无文件');
+
   try {
     const {
       provider,
@@ -186,20 +201,32 @@ app.post('/api/analyze/stream', upload.single('file'), async (req, res) => {
       {
         stream: true,
         onProgress: (stage, chunk, fullContent) => {
+          console.log(`流式进度: ${stage}, chunk长度: ${chunk ? chunk.length : 0}`);
           if (chunk) {
             // 发送流式数据
-            res.write(`data: ${JSON.stringify({
+            const data = {
               stage,
               chunk,
               timestamp: new Date().toISOString()
-            })}\n\n`);
+            };
+            const dataStr = `data: ${JSON.stringify(data)}\n\n`;
+            console.log(`发送流式数据: ${dataStr.substring(0, 100)}...`);
+            res.write(dataStr);
           } else if (stage.includes('_complete')) {
             // 发送阶段完成信号
-            res.write(`data: ${JSON.stringify({
+            const completionData = {
               stage,
               completed: true,
               timestamp: new Date().toISOString()
-            })}\n\n`);
+            };
+
+            // 对于structure_complete，添加更多信息
+            if (stage === 'structure_complete' && fullContent) {
+              completionData.sectionCount = fullContent.sections?.length || 0;
+              completionData.documentSummary = fullContent.document_summary || '';
+            }
+
+            res.write(`data: ${JSON.stringify(completionData)}\n\n`);
           }
         }
       }

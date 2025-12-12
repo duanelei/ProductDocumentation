@@ -82,9 +82,8 @@ class DocumentProcessor {
       // 第二阶段：设计缺陷检查
       console.log('开始阶段2：设计缺陷检查');
       const designSections = this.getRelevantSections(processedDoc, { key: '设计缺陷检查' });
-      const designContent = this.generateContentForAnalysis(designSections, 3000);
+      const designContent = this.generateContentForAnalysis(designSections, 2000); // 减少内容长度
 
-      const structureContent = stream ? structureResponse.content : structureResponse.data.choices[0].message.content;
       messages.push({ role: 'assistant', content: structureContent });
       messages.push({
         role: 'user',
@@ -101,24 +100,24 @@ ${designContent}
 3. 用户体验问题
 4. 界面一致性问题
 
-请返回JSON格式：
+请返回纯JSON格式，不要包含markdown代码块：
 {
   "result": "详细的设计缺陷分析内容，包括发现的问题和改进建议"
 }`
       });
 
       const designResponse = stream
-        ? await aiService.callAIStream(provider, apiKey, customApiUrl, customModel, messages, 3000,
+        ? await aiService.callAIStream(provider, apiKey, customApiUrl, customModel, messages, 2000,
             (chunk, fullContent) => onProgress && onProgress('design', chunk, fullContent))
-        : await aiService.callAI(provider, apiKey, customApiUrl, customModel, messages, 3000);
+        : await aiService.callAI(provider, apiKey, customApiUrl, customModel, messages, 2000);
 
       // 第三阶段：逻辑一致性分析
       console.log('开始阶段3：逻辑一致性分析');
       const logicSections = this.getRelevantSections(processedDoc, { key: '逻辑一致性分析' });
-      const logicContent = this.generateContentForAnalysis(logicSections, 2500);
+      const logicContent = this.generateContentForAnalysis(logicSections, 2000); // 减少内容长度
 
-      const designContent = stream ? designResponse.content : designResponse.data.choices[0].message.content;
-      messages.push({ role: 'assistant', content: designContent });
+      const designResponseContent = stream ? designResponse.content : designResponse.data.choices[0].message.content;
+      messages.push({ role: 'assistant', content: designResponseContent });
       messages.push({
         role: 'user',
         content: `阶段3：逻辑一致性分析
@@ -134,24 +133,24 @@ ${logicContent}
 3. 规则和约束的统一性
 4. 概念定义的一致性
 
-请返回JSON格式：
+请返回纯JSON格式，不要包含markdown代码块：
 {
   "result": "详细的逻辑一致性分析内容，包括发现的矛盾和不一致问题"
 }`
       });
 
       const logicResponse = stream
-        ? await aiService.callAIStream(provider, apiKey, customApiUrl, customModel, messages, 2500,
+        ? await aiService.callAIStream(provider, apiKey, customApiUrl, customModel, messages, 2000,
             (chunk, fullContent) => onProgress && onProgress('logic', chunk, fullContent))
-        : await aiService.callAI(provider, apiKey, customApiUrl, customModel, messages, 2500);
+        : await aiService.callAI(provider, apiKey, customApiUrl, customModel, messages, 2000);
 
       // 第四阶段：风险评估
       console.log('开始阶段4：风险评估');
       const riskSections = this.getRelevantSections(processedDoc, { key: '风险评估' });
-      const riskContent = this.generateContentForAnalysis(riskSections, 2000);
+      const riskContent = this.generateContentForAnalysis(riskSections, 1500); // 减少内容长度
 
-      const logicContent = stream ? logicResponse.content : logicResponse.data.choices[0].message.content;
-      messages.push({ role: 'assistant', content: logicContent });
+      const logicResponseContent = stream ? logicResponse.content : logicResponse.data.choices[0].message.content;
+      messages.push({ role: 'assistant', content: logicResponseContent });
       messages.push({
         role: 'user',
         content: `阶段4：风险评估
@@ -168,16 +167,16 @@ ${riskContent}
 4. 性能和扩展性风险
 5. 维护和运营风险
 
-请返回JSON格式：
+请返回纯JSON格式，不要包含markdown代码块：
 {
   "result": "详细的风险评估内容，包括风险等级、具体风险描述和缓解措施建议"
 }`
       });
 
       const riskResponse = stream
-        ? await aiService.callAIStream(provider, apiKey, customApiUrl, customModel, messages, 2000,
+        ? await aiService.callAIStream(provider, apiKey, customApiUrl, customModel, messages, 1500,
             (chunk, fullContent) => onProgress && onProgress('risk', chunk, fullContent))
-        : await aiService.callAI(provider, apiKey, customApiUrl, customModel, messages, 2000);
+        : await aiService.callAI(provider, apiKey, customApiUrl, customModel, messages, 1500);
 
           // 解析各阶段结果
           const designResult = this.extractJsonFromResponse(stream ? designResponse.content : designResponse.data.choices[0].message.content);
@@ -186,13 +185,13 @@ ${riskContent}
 
       return {
         processedDoc,
-        usage: riskResponse.data.usage,
+        usage: stream ? riskResponse.usage : riskResponse.data.usage,
         documentStructure: `📄 文档摘要：${processedDoc.document_summary}\n\n📊 分析结果：共识别${processedDoc.sections.length}个段落\n\n主要段落：\n${
           processedDoc.sections.slice(0, 5).map(s => `• ${s.title} (${s.category})`).join('\n')
         }${processedDoc.sections.length > 5 ? `\n...还有${processedDoc.sections.length - 5}个段落` : ''}`,
-        '设计缺陷检查': designResult.result || designResponse.data.choices[0].message.content,
-        '逻辑一致性分析': logicResult.result || logicResponse.data.choices[0].message.content,
-        '风险评估': riskResult.result || riskResponse.data.choices[0].message.content
+        '设计缺陷检查': designResult.result || (stream ? designResponse.content : designResponse.data.choices[0].message.content),
+        '逻辑一致性分析': logicResult.result || (stream ? logicResponse.content : logicResponse.data.choices[0].message.content),
+        '风险评估': riskResult.result || (stream ? riskResponse.content : riskResponse.data.choices[0].message.content)
       };
 
     } catch (error) {
@@ -218,7 +217,7 @@ ${riskContent}
 文档内容：
 ${text.substring(0, 10000)}
 
-请返回精确的JSON结构：
+请返回纯JSON格式，不要包含markdown代码块：
 {
   "document_summary": "文档整体摘要（150字以内，包含文档类型、主要功能、关键特点）",
   "document_type": "产品需求文档|技术设计文档|用户手册|其他",
@@ -295,7 +294,7 @@ ${text.substring(0, 10000)}
         cleaned = cleaned.substring(jsonStart);
       }
 
-      // 改进的括号匹配逻辑
+      // 改进的括号匹配逻辑，处理转义字符
       let braceCount = 0;
       let bracketCount = 0;
       let inString = false;
@@ -347,7 +346,14 @@ ${text.substring(0, 10000)}
         cleaned = cleaned.substring(0, endPos);
       } else {
         console.warn('Could not find JSON end, using full content');
+        // 如果找不到结束位置，尝试截取到一个合理的长度
+        if (cleaned.length > 10000) {
+          cleaned = cleaned.substring(0, 10000) + '...}';
+        }
       }
+
+      // 修复常见的JSON问题
+      cleaned = this.repairJsonString(cleaned);
 
       cleaned = cleaned.trim();
       console.log('Final JSON length:', cleaned.length);
@@ -359,15 +365,129 @@ ${text.substring(0, 10000)}
       console.log('JSON parsing successful');
       return result;
 
-    } catch (e) {
-      console.warn('JSON提取失败:', e.message);
-      console.warn('Failed content preview:', content.substring(Math.max(0, 7300), Math.min(content.length, 7500))); // 错误位置附近
+    } catch (error) {
+      console.error('JSON解析失败:', error.message);
+      console.error('失败内容预览:', cleaned.substring(0, 500));
+
+      // 尝试多种修复策略
+      try {
+        console.log('尝试修复JSON...');
+        let repaired = this.repairJsonString(cleaned);
+
+        if (repaired !== cleaned) {
+          console.log('JSON已修复，重新尝试解析...');
+          const result = JSON.parse(repaired);
+          return result;
+        }
+      } catch (repairError) {
+        console.error('JSON修复也失败:', repairError.message);
+      }
 
       // 如果解析失败，返回一个基本的结构
       return {
         result: 'AI返回的内容格式无法解析，但分析可能已完成。请检查AI的原始响应。'
       };
     }
+  }
+
+  /**
+   * 修复常见的JSON字符串问题
+   */
+  repairJsonString(jsonString) {
+    let repaired = jsonString;
+
+    // 1. 修复多余的逗号（在对象或数组结束前）
+    repaired = repaired.replace(/,(\s*[}\]])/g, '$1');
+
+    // 2. 修复未闭合的字符串（简单检测）
+    const quoteCount = (repaired.match(/"/g) || []).length;
+    if (quoteCount % 2 !== 0) {
+      // 如果引号数量是奇数，尝试在末尾添加引号
+      console.log('检测到未闭合的字符串，尝试修复...');
+      repaired += '"';
+    }
+
+    // 3. 修复未闭合的对象或数组
+    const openBraces = (repaired.match(/{/g) || []).length;
+    const closeBraces = (repaired.match(/}/g) || []).length;
+    const openBrackets = (repaired.match(/\[/g) || []).length;
+    const closeBrackets = (repaired.match(/\]/g) || []).length;
+
+    // 添加缺失的闭合符号
+    const missingBraces = openBraces - closeBraces;
+    const missingBrackets = openBrackets - closeBrackets;
+
+    for (let i = 0; i < missingBraces; i++) {
+      repaired += '}';
+    }
+
+    for (let i = 0; i < missingBrackets; i++) {
+      repaired += ']';
+    }
+
+    if (missingBraces > 0 || missingBrackets > 0) {
+      console.log(`修复了缺失的符号: ${missingBraces} 个'}', ${missingBrackets} 个']'`);
+    }
+
+    // 4. 移除可能的多余内容（在JSON结束后）
+    const firstBrace = repaired.indexOf('{');
+    const firstBracket = repaired.indexOf('[');
+
+    if (firstBrace >= 0 || firstBracket >= 0) {
+      const jsonStart = Math.min(firstBrace >= 0 ? firstBrace : Infinity, firstBracket >= 0 ? firstBracket : Infinity);
+      let jsonEnd = -1;
+
+      // 简单查找JSON结束位置
+      let braceCount = 0;
+      let bracketCount = 0;
+      let inString = false;
+      let escapeNext = false;
+
+      for (let i = jsonStart; i < repaired.length; i++) {
+        const char = repaired[i];
+
+        if (escapeNext) {
+          escapeNext = false;
+          continue;
+        }
+
+        if (char === '\\') {
+          escapeNext = true;
+          continue;
+        }
+
+        if (char === '"') {
+          inString = !inString;
+          continue;
+        }
+
+        if (!inString) {
+          if (char === '{') braceCount++;
+          else if (char === '}') {
+            braceCount--;
+            if (braceCount === 0 && jsonStart === firstBrace) {
+              jsonEnd = i + 1;
+              break;
+            }
+          }
+          else if (char === '[') bracketCount++;
+          else if (char === ']') {
+            bracketCount--;
+            if (bracketCount === 0 && jsonStart === firstBracket) {
+              jsonEnd = i + 1;
+              break;
+            }
+          }
+        }
+      }
+
+      if (jsonEnd > 0 && jsonEnd < repaired.length) {
+        repaired = repaired.substring(0, jsonEnd);
+        console.log('移除了JSON后的多余内容');
+      }
+    }
+
+    return repaired;
   }
 
   /**
@@ -648,8 +768,8 @@ ${text.substring(0, 10000)}
           { role: 'user', content: `${analysisType.prompt}\n\n文档片段:\n${content}\n\n请返回：{"result": "详细分析内容"}` }
         ];
 
-        const response = await aiService.callAI(provider, apiKey, customApiUrl, customModel, messages, 3000);
-        const parsed = this.extractJsonFromResponse(response.data.choices[0].message.content);
+        const response = await aiService.callAIStream(provider, apiKey, customApiUrl, customModel, messages, 3000);
+        const parsed = this.extractJsonFromResponse(response.content);
 
         results[analysisType.key] = parsed.result || response.data.choices[0].message.content;
         if (response.data.usage) {

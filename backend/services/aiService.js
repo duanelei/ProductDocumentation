@@ -96,105 +96,6 @@ class AIService {
   }
 
   /**
-   * 获取API URL
-   */
-  getApiUrl(provider, customApiUrl) {
-    switch (provider) {
-      case 'openai':
-        return 'https://api.openai.com/v1/chat/completions';
-      case 'deepseek':
-        return 'https://api.deepseek.com/v1/chat/completions';
-      case 'custom':
-        return customApiUrl;
-      default:
-        throw new Error(`不支持的AI提供商: ${provider}`);
-    }
-  }
-
-  /**
-   * 获取模型名称
-   */
-  getModelName(provider, customModel) {
-    switch (provider) {
-      case 'openai':
-        return 'gpt-4o-mini';
-      case 'deepseek':
-        return 'deepseek-chat';
-      case 'custom':
-        return customModel;
-      default:
-        return 'gpt-4o-mini';
-    }
-  }
-
-  /**
-   * 发送HTTP请求
-   */
-  async makeRequest(url, payload, apiKey) {
-    const headers = {
-      'Content-Type': 'application/json',
-    };
-
-    // 根据提供商设置认证头
-    if (url.includes('api.openai.com') || url.includes('api.deepseek.com')) {
-      headers['Authorization'] = `Bearer ${apiKey}`;
-    } else {
-      // 自定义API可能使用不同的认证方式
-      headers['Authorization'] = `Bearer ${apiKey}`;
-    }
-
-    console.log(`Making API request to: ${url}`);
-    console.log(`Payload size: ${JSON.stringify(payload).length} characters`);
-    console.log(`Messages count: ${payload.messages.length}`);
-
-    try {
-      const response = await axios.post(url, payload, {
-        headers,
-        timeout: 60000, // 60秒超时
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity
-      });
-
-      console.log(`API response status: ${response.status}`);
-
-      return {
-        status: response.status,
-        data: response.data
-      };
-    } catch (error) {
-      console.error('AI API请求失败:', error.response?.data || error.message);
-
-      // 提供更友好的错误信息
-      let friendlyMessage = 'AI服务请求失败';
-      if (error.response) {
-        const status = error.response.status;
-        switch (status) {
-          case 401:
-            friendlyMessage = 'API密钥无效或过期';
-            break;
-          case 403:
-            friendlyMessage = 'API密钥权限不足';
-            break;
-          case 429:
-            friendlyMessage = '请求过于频繁，请稍后再试';
-            break;
-          case 500:
-          case 502:
-          case 503:
-            friendlyMessage = 'AI服务暂时不可用，请稍后再试';
-            break;
-          default:
-            friendlyMessage = `AI服务错误 (${status})`;
-        }
-      } else if (error.code === 'ECONNABORTED') {
-        friendlyMessage = '请求超时，请检查网络连接';
-      }
-
-      throw new Error(friendlyMessage);
-    }
-  }
-
-  /**
    * 发送流式HTTP请求
    */
   async makeStreamRequest(url, payload, apiKey, onChunk) {
@@ -212,7 +113,7 @@ class AIService {
     try {
       const response = await axios.post(url, payload, {
         headers,
-        timeout: 120000, // 2分钟超时（流式可能需要更长时间）
+        timeout: 180000, // 3分钟超时（流式需要更长时间）
         maxContentLength: Infinity,
         maxBodyLength: Infinity,
         responseType: 'stream' // 启用流式响应
@@ -298,6 +199,94 @@ class AIService {
 
       throw new Error(friendlyMessage);
     }
+  }
+
+  /**
+   * 获取API URL
+   */
+  getApiUrl(provider, customApiUrl) {
+    switch (provider) {
+      case 'openai':
+        return 'https://api.openai.com/v1/chat/completions';
+      case 'deepseek':
+        return 'https://api.deepseek.com/v1/chat/completions';
+      case 'custom':
+        return customApiUrl;
+      default:
+        throw new Error(`不支持的AI提供商: ${provider}`);
+    }
+  }
+
+  /**
+   * 获取模型名称
+   */
+  getModelName(provider, customModel) {
+    switch (provider) {
+      case 'openai':
+        return 'gpt-4o-mini';
+      case 'deepseek':
+        return 'deepseek-chat';
+      case 'custom':
+        return customModel;
+      default:
+        return 'gpt-4o-mini';
+    }
+  }
+
+  /**
+   * 发送HTTP请求
+   */
+  async makeRequest(url, payload, apiKey) {
+    const headers = {
+      'Content-Type': 'application/json',
+    };
+
+    // 根据提供商设置认证头
+    if (url.includes('api.openai.com') || url.includes('api.deepseek.com')) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    } else {
+      // 自定义API可能使用不同的认证方式
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+
+    console.log(`Making API request to: ${url}`);
+    console.log(`Payload size: ${JSON.stringify(payload).length} characters`);
+    console.log(`Messages count: ${payload.messages.length}`);
+
+    // 实现重试机制
+    let lastError;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        console.log(`Attempt ${attempt}/3 - Making API request to: ${url}`);
+
+        const response = await axios.post(url, payload, {
+          headers,
+          timeout: 120000, // 120秒超时（增加超时时间）
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity
+        });
+
+        console.log(`API response status: ${response.status}`);
+        return {
+          status: response.status,
+          data: response.data
+        };
+
+      } catch (error) {
+        lastError = error;
+        console.warn(`Attempt ${attempt}/3 failed:`, error.message);
+
+        // 如果不是最后一次尝试，等待后重试
+        if (attempt < 3) {
+          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000); // 指数退避，最多5秒
+          console.log(`Waiting ${delay}ms before retry...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    // 所有重试都失败了
+    throw lastError;
   }
 }
 
