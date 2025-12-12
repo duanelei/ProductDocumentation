@@ -823,7 +823,7 @@ ${text.substring(0, 10000)}
 
         let data = null;
         let contentStr = '';
-        
+
         try {
           const response = await fetch(apiUrl, {
             method: 'POST',
@@ -1910,7 +1910,7 @@ ${text.substring(0, 10000)}
                 removeStreamingDisplay();
               }, 1500);
 
-              return {
+      return {
                 success: true,
                 data: result.data,
                 usage: result.usage
@@ -2186,8 +2186,8 @@ ${text.substring(0, 10000)}
 
       // 保存完整结果
       lastResult = {
-        success: true,
-        analysis_id: crypto.randomUUID(),
+          success: true,
+          analysis_id: crypto.randomUUID(),
         results: allResults,
         metadata: { confidence: 0.8 },
         usage: totalUsage.total_tokens > 0 ? totalUsage : null,
