@@ -445,11 +445,7 @@ ${riskContent}
 
           const riskResponse = await this.callApiWithMessages(apiUrl, model, messages);
 
-          // 解析各阶段结果
-          const designResult = this.extractJsonFromResponse(designResponse.content);
-          const logicResult = this.extractJsonFromResponse(logicResponse.content);
-          const riskResult = this.extractJsonFromResponse(riskResponse.content);
-
+          // 直接使用AI返回的自然语言内容，不再解析JSON
           return {
             processedDoc,
             usage: riskResponse.usage, // 使用最后一次调用的usage
@@ -458,9 +454,9 @@ ${riskContent}
                   processedDoc.sections.slice(0, 5).map(s => `• ${s.title} (${s.category})`).join('\n')
                 }${processedDoc.sections.length > 5 ? `\n...还有${processedDoc.sections.length - 5}个段落` : ''}`
               : `📄 文档摘要：${processedDoc.document_summary}\n\n⚠️ 文档段落识别详情：\n• 文档总字符数：${processedDoc.metadata?.total_length || 0}\n• 识别段落数：0\n• 处理方法：传统分块\n\n🔍 可能的原因：\n• PDF文档主要是图片或扫描件\n• 文本内容格式特殊（无明确段落分隔）\n• 文档内容过于简短或不适合结构化分析\n\n💡 建议：\n• 检查PDF是否包含可搜索文本\n• 尝试使用其他文档格式\n• 如果是图片PDF，可能需要OCR处理`,
-            '设计缺陷检查': designResult.result || designResponse.content,
-            '逻辑一致性分析': logicResult.result || logicResponse.content,
-            '风险评估': riskResult.result || riskResponse.content
+            '设计缺陷检查': designResponse.content,
+            '逻辑一致性分析': logicResponse.content,
+            '风险评估': riskResponse.content
           };
 
         } catch (error) {
@@ -1508,46 +1504,9 @@ ${text.substring(0, 10000)}
             throw new Error(result.message || '分析失败');
           }
 
+          // 直接处理分析结果
           processAnalysisResult(result.data);
         }
-
-        // 显示文档结构分析结果
-        if (analysisData.documentStructure) {
-          allResults['文档结构分析'] = analysisData.documentStructure;
-          updateDocStats(analysisData.processedDoc);
-          renderTabs(allResults);
-        }
-
-        // 显示各分析阶段的结果
-        const analysisStages = ['设计缺陷检查', '逻辑一致性分析', '风险评估'];
-        for (let i = 0; i < analysisStages.length; i++) {
-          const stageName = analysisStages[i];
-          const stepIndex = i + 2; // steps[2]开始是第一个分析步骤
-
-          logStep(steps[stepIndex].label, steps[stepIndex].progress);
-
-          if (analysisData[stageName]) {
-            allResults[stageName] = analysisData[stageName];
-          } else {
-            allResults[stageName] = '分析阶段未完成或失败';
-          }
-
-          // 更新UI显示
-          renderTabs(allResults);
-          updateTokenUsage(totalUsage.total_tokens > 0 ? totalUsage : null);
-        }
-
-        // 保存完整结果
-        lastResult = {
-          success: true,
-          analysis_id: crypto.randomUUID(),
-          results: allResults,
-          metadata: { confidence: 0.8 },
-          usage: totalUsage.total_tokens > 0 ? totalUsage : null,
-        };
-
-        logStep(steps[5].label, steps[5].progress, true); // 最后一步
-        toggleActions(true);
       } catch (err) {
         console.error('Analysis failed:', err);
 
@@ -1860,11 +1819,17 @@ ${text.substring(0, 10000)}
           console.log('开始发送流式分析请求到: http://localhost:3001/api/analyze/stream');
           console.log('FormData内容:', Array.from(formData.entries()));
 
+          // 创建AbortController，但不设置超时
+          // 流式连接应该保持打开直到完成，不应该有超时限制
+          const abortController = new AbortController();
+          let timeoutId = null; // 移除超时限制，让流式连接自然完成
+
           const analysisPromise = fetch('http://localhost:3001/api/analyze/stream', {
             method: 'POST',
             body: formData,
-            signal: AbortSignal.timeout(30000) // 30秒超时
+            signal: abortController.signal
           }).then(async (response) => {
+            if (timeoutId) clearTimeout(timeoutId); // 如果有超时定时器，清除它
             console.log('收到响应:', {
               ok: response.ok,
               status: response.status,
@@ -1892,23 +1857,26 @@ ${text.substring(0, 10000)}
                 throw new Error(result.message || '分析失败');
               }
 
-              // 模拟流式进度
+              // 模拟流式进度，结构完成后关闭弹窗
               const stages = ['structure', 'design', 'logic', 'risk'];
               for (let i = 0; i < stages.length; i++) {
                 const stage = stages[i];
                 const progress = getStageProgress(stage);
                 logStep(`${getStageDisplayName(stage)}完成`, progress);
                 updateStreamingContent(stage, `正在进行${getStageDisplayName(stage)}...`);
-                await new Promise(resolve => setTimeout(resolve, 1000)); // 模拟延迟
+                // 结构完成后关闭弹窗
+                if (stage === 'structure') {
+                  removeStreamingDisplay();
+                }
+                await new Promise(resolve => setTimeout(resolve, 800)); // 模拟延迟
               }
 
               logStep('✅ 分析完成！', 100, true);
               updateStreamingContent('complete', '🎉 分析完成，显示完整结果');
 
-              setTimeout(() => {
-                processAnalysisResult(result.data);
-                removeStreamingDisplay();
-              }, 1500);
+              // 立即关闭弹窗并展示结果
+              processAnalysisResult(result.data);
+              // 弹窗可能已关闭，无需重复
 
       return {
                 success: true,
@@ -1920,7 +1888,10 @@ ${text.substring(0, 10000)}
             return new Promise((resolve, reject) => {
               let buffer = '';
               let allResults = {};
-              let totalUsage = { total_tokens: 0 };
+              let totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+              let lastHeartbeat = Date.now();
+              let overlayClosed = false; // 控制弹窗只关闭一次
+              let heartbeatInterval;
 
               console.log('响应对象:', {
                 ok: response.ok,
@@ -1934,18 +1905,43 @@ ${text.substring(0, 10000)}
               const decoder = new TextDecoder();
               console.log('创建了ReadableStream reader');
 
+              // 设置心跳检测 - 如果30秒内没有收到任何数据，显示警告
+              heartbeatInterval = setInterval(() => {
+                const timeSinceLastData = Date.now() - lastHeartbeat;
+                if (timeSinceLastData > 30000) {
+                  console.warn('长时间未收到数据，可能后端正在处理中...');
+                  updateStreamingContent('processing', 'AI正在处理中，请耐心等待...（这可能需要几分钟）');
+                }
+              }, 10000); // 每10秒检查一次
+
               function processStream() {
                 reader.read().then(({ done, value }) => {
                   if (done) {
                     console.log('流式响应完成');
+                    clearInterval(heartbeatInterval);
+                    
+                    // 确保返回的数据结构正确
+                    const resultData = {
+                      ...(allResults || {}),
+                      usage: (totalUsage && totalUsage.total_tokens > 0) ? totalUsage : null
+                    };
+                    
+                    // 确保 resultData 有效
+                    if (!resultData || typeof resultData !== 'object') {
+                      console.error('流式响应完成时 resultData 无效:', resultData);
+                      reject(new Error('分析结果数据格式错误'));
+                      return;
+                    }
+                    
                     resolve({
                       success: true,
-                      data: allResults,
-                      usage: totalUsage
+                      data: resultData,
+                      usage: totalUsage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
                     });
                     return;
                   }
 
+                  lastHeartbeat = Date.now(); // 更新最后收到数据的时间
                   const chunk = decoder.decode(value, { stream: true });
                   console.log('收到流式数据块:', chunk.length, '字符');
                   buffer += chunk;
@@ -1960,10 +1956,25 @@ ${text.substring(0, 10000)}
                     if (line.startsWith('data: ')) {
                       const dataStr = line.slice(6).trim();
                       if (dataStr === '[DONE]') {
+                        clearInterval(heartbeatInterval);
+                        
+                        // 确保返回的数据结构正确
+                        const resultData = {
+                          ...(allResults || {}),
+                          usage: (totalUsage && totalUsage.total_tokens > 0) ? totalUsage : null
+                        };
+                        
+                        // 确保 resultData 有效
+                        if (!resultData || typeof resultData !== 'object') {
+                          console.error('[DONE] 时 resultData 无效:', resultData);
+                          reject(new Error('分析结果数据格式错误'));
+                          return;
+                        }
+                        
                         resolve({
                           success: true,
-                          data: allResults,
-                          usage: totalUsage
+                          data: resultData,
+                          usage: totalUsage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
                         });
                         return;
                       }
@@ -1975,22 +1986,99 @@ ${text.substring(0, 10000)}
 
                         if (data.stage === 'complete') {
                           // 分析完成
-                          allResults = data.results;
+                          clearInterval(heartbeatInterval);
+                          
+                          // 确保 data.results 存在
+                          if (data && data.results && typeof data.results === 'object') {
+                            allResults = { ...data.results };
+                            
+                            // 安全地提取 usage 信息
+                            if (data.results && data.results.usage && typeof data.results.usage === 'object') {
+                              totalUsage = {
+                                prompt_tokens: data.results.usage.prompt_tokens || 0,
+                                completion_tokens: data.results.usage.completion_tokens || 0,
+                                total_tokens: data.results.usage.total_tokens || 0
+                              };
+                            }
+                            
+                            // 从 allResults 中移除 usage，避免重复
+                            if (allResults.usage) {
+                              delete allResults.usage;
+                            }
+                          } else {
+                            console.warn('Complete stage data.results is invalid:', data);
+                            // 即使 results 无效，也尝试继续处理，使用已有的 allResults
+                            if (!allResults || typeof allResults !== 'object') {
+                              allResults = {};
+                            }
+                          }
 
                           // 显示最终结果
                           logStep('✅ 分析完成！', 100, true);
                           updateStreamingContent('complete', '🎉 分析完成，显示完整结果');
 
-                          // 延迟一下显示完整结果，让用户看到完成状态
-                          setTimeout(() => {
-                            processAnalysisResult(allResults);
-                            removeStreamingDisplay();
+                          // 立即展示结果并关闭弹窗
+                          try {
+                            // 确保传递正确的数据结构，包含 usage
+                            // 如果 allResults 为空，尝试从 data.results 获取
+                            if (!allResults || Object.keys(allResults).length === 0) {
+                              if (data && data.results && typeof data.results === 'object') {
+                                allResults = { ...data.results };
+                                // 移除 usage，单独处理
+                                if (allResults.usage) {
+                                  delete allResults.usage;
+                                }
+                              }
+                            }
+                            
+                            const resultData = {
+                              ...allResults,
+                              usage: (totalUsage && totalUsage.total_tokens > 0) ? totalUsage : null
+                            };
+                            
+                            // 确保 resultData 不是 undefined
+                            if (!resultData || typeof resultData !== 'object') {
+                              console.error('resultData is invalid:', resultData);
+                              console.error('allResults:', allResults);
+                              console.error('data:', data);
+                              reject(new Error('分析结果数据格式错误'));
+                              return;
+                            }
+                            
+                            // 确保 resultData 包含所有必需的字段
+                            if (!resultData.documentStructure && !resultData['设计缺陷检查'] && !resultData['逻辑一致性分析'] && !resultData['风险评估']) {
+                              console.warn('resultData 缺少分析结果字段:', Object.keys(resultData));
+                              console.warn('resultData 内容:', resultData);
+                            }
+                            
+                            console.log('准备调用 processAnalysisResult，resultData:', resultData);
+                            console.log('resultData.usage:', resultData.usage);
+                            
+                            processAnalysisResult(resultData);
+                            if (!overlayClosed) {
+                              removeStreamingDisplay();
+                              overlayClosed = true;
+                            }
                             resolve({
                               success: true,
-                              data: allResults,
-                              usage: totalUsage
+                              data: resultData,
+                              usage: totalUsage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
                             });
-                          }, 1500);
+                          } catch (error) {
+                            console.error('处理分析结果失败:', error);
+                            console.error('错误详情:', error.stack);
+                            console.error('错误消息:', error.message);
+                            console.error('allResults:', allResults);
+                            console.error('totalUsage:', totalUsage);
+                            console.error('data:', data);
+                            removeStreamingDisplay();
+                            reject(error);
+                          }
+
+                        } else if (data.stage === 'error') {
+                          // 收到错误信息
+                          clearInterval(heartbeatInterval);
+                          throw new Error(data.error || '分析过程中发生错误');
 
                         } else if (data.completed) {
                           // 阶段完成
@@ -2002,27 +2090,30 @@ ${text.substring(0, 10000)}
                             // 文档结构分析完成，显示摘要信息
                             const sectionCount = data.sectionCount || 0;
                             updateStreamingContent(stageName, `文档结构分析完成，发现 ${sectionCount} 个段落`);
+                            // 结构分析完成后立即关闭弹窗，其余阶段继续流式展示在Tab
+                            if (!overlayClosed) {
+                              removeStreamingDisplay();
+                              overlayClosed = true;
+                            }
                           }
 
                           logStep(`${stageDisplayName}完成`, progress);
                         } else if (data.chunk) {
-                          // 实时内容更新 - 检查内容是否适合显示
+                          // 实时内容更新 - 直接显示AI返回的自然语言内容
                           let displayContent = data.chunk;
 
                           if (data.stage === 'structure') {
-                            // 结构分析阶段显示友好文本
-                            displayContent = '正在分析文档结构，识别章节和段落层次...';
-                          } else if (data.chunk.trim().startsWith('{') || data.chunk.trim().startsWith('[')) {
-                            // 如果是JSON格式，显示友好文本
-                            const stageMessages = {
-                              'design': '正在检查UI/UX设计规范和交互逻辑...',
-                              'logic': '正在分析业务逻辑连贯性和数据流一致性...',
-                              'risk': '正在评估技术风险和安全隐患...'
-                            };
-                            displayContent = stageMessages[data.stage] || `正在进行${getStageDisplayName(data.stage)}...`;
+                            // 结构分析阶段，如果内容太短可能是状态消息，显示友好文本
+                            if (data.chunk.length < 50) {
+                              displayContent = '正在分析文档结构，识别章节和段落层次...';
+                            }
                           }
 
+                          // 直接显示AI返回的自然语言内容，实时流式展示
                           updateStreamingContent(data.stage, displayContent);
+                        } else if (data.stage === 'heartbeat' || data.stage === 'processing') {
+                          // 心跳或处理中消息
+                          updateStreamingContent(data.stage, data.message || 'AI正在处理中，请耐心等待...');
                         }
                       } catch (error) {
                         console.error('解析流式数据失败:', error, '原始数据:', dataStr);
@@ -2031,7 +2122,10 @@ ${text.substring(0, 10000)}
                   }
 
                   processStream();
-                }).catch(reject);
+                }).catch((error) => {
+                  clearInterval(heartbeatInterval);
+                  reject(error);
+                });
               }
 
               processStream();
@@ -2045,13 +2139,18 @@ ${text.substring(0, 10000)}
 
           // 显示错误信息而不是移除显示
           let errorMsg = error.message;
-          if (error.name === 'AbortError') {
-            errorMsg = '请求超时，请检查网络连接或后端服务状态';
+          if (error.name === 'AbortError' || error.name === 'TimeoutError') {
+            errorMsg = '请求超时（5分钟），分析可能需要更长时间。请检查：\n1. 网络连接是否正常\n2. 后端服务是否正在运行\n3. AI API是否响应正常';
           } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
             errorMsg = '网络连接失败，请确保后端服务正在运行 (localhost:3001)';
           }
 
           updateStreamingContent('error', `分析失败：${errorMsg}`);
+          
+          // 清理UI状态
+          toggleActions(false);
+          logStep('❌ 分析失败', 0, true);
+          
           setTimeout(() => {
             removeStreamingDisplay();
             reject(error);
@@ -2085,7 +2184,7 @@ ${text.substring(0, 10000)}
         <div style="margin-bottom: 20px;">
           <div style="font-size: 24px; margin-bottom: 10px;">🤖 AI 正在分析中...</div>
           <div id="streaming-stage" style="font-size: 18px; color: #4ade80; margin-bottom: 15px;">准备开始</div>
-          <div id="streaming-content" style="font-size: 14px; line-height: 1.6; color: #e5e7eb; min-height: 60px;">
+          <div id="streaming-content" style="font-size: 14px; line-height: 1.8; color: #e5e7eb; min-height: 60px; max-height: 400px; overflow-y: auto; padding: 10px; background: rgba(255, 255, 255, 0.05); border-radius: 8px; white-space: pre-wrap; word-wrap: break-word;">
             初始化分析环境...
           </div>
         </div>
@@ -2112,7 +2211,7 @@ ${text.substring(0, 10000)}
       document.body.appendChild(streamingContainer);
     }
 
-    // 更新流式内容显示
+    // 更新流式内容显示 - 支持自然语言流式展示
     function updateStreamingContent(stage, content) {
       const streamingContainer = document.getElementById('streaming-display');
       if (!streamingContainer) return;
@@ -2127,20 +2226,44 @@ ${text.substring(0, 10000)}
           'design': '🎨 设计缺陷检查',
           'logic': '🧠 逻辑一致性分析',
           'risk': '⚠️ 风险评估',
-          'complete': '✅ 分析完成'
+          'complete': '✅ 分析完成',
+          'processing': '⏳ 处理中',
+          'heartbeat': '⏳ 处理中'
         };
 
-        stageElement.textContent = stageNames[stage] || stage;
-        contentElement.textContent = content;
+        // 对于心跳和处理中消息，保持当前阶段显示，只更新内容
+        if (stage === 'heartbeat' || stage === 'processing') {
+          // 不改变阶段显示，只更新内容
+          contentElement.textContent = content;
+        } else {
+          // 更新阶段名称
+          if (stageNames[stage]) {
+            stageElement.textContent = stageNames[stage];
+          }
+          
+          // 对于流式内容，实现打字机效果 - 直接显示完整内容
+          if (stage === 'design' || stage === 'logic' || stage === 'risk' || stage === 'structure') {
+            // 流式内容直接显示，AI会逐步返回完整内容
+            contentElement.textContent = content;
+          } else {
+            // 其他情况直接替换
+            contentElement.textContent = content;
+          }
+        }
 
-        // 添加一些动画效果
-        contentElement.style.animation = 'fadeIn 0.5s ease-in';
-        setTimeout(() => {
-          contentElement.style.animation = '';
-        }, 500);
+        // 滚动到底部，确保最新内容可见
+        contentElement.scrollTop = contentElement.scrollHeight;
+
+        // 添加一些动画效果（只在内容更新时）
+        if (content.length > 0) {
+          contentElement.style.animation = 'fadeIn 0.3s ease-in';
+          setTimeout(() => {
+            contentElement.style.animation = '';
+          }, 300);
+        }
       }
 
-      console.log(`[${stage}] ${content}`);
+      console.log(`[${stage}] ${content.substring(0, 100)}...`);
     }
 
     // 移除流式显示容器
@@ -2159,8 +2282,35 @@ ${text.substring(0, 10000)}
     // 处理分析结果
     function processAnalysisResult(analysisData) {
       // 处理分析结果
+      // 确保 analysisData 存在
+      if (!analysisData || typeof analysisData !== 'object') {
+        console.error('processAnalysisResult: analysisData is invalid', analysisData);
+        console.error('analysisData type:', typeof analysisData);
+        console.error('analysisData value:', analysisData);
+        alert('分析结果数据格式错误，请重试');
+        toggleActions(false);
+        return;
+      }
+
       const allResults = {};
-      const totalUsage = analysisData.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+      // 安全地访问 usage 属性，确保 usage 是一个对象
+      let totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+      
+      // 使用可选链操作符安全地访问 usage
+      try {
+        if (analysisData && analysisData.usage && typeof analysisData.usage === 'object' && analysisData.usage !== null) {
+          totalUsage = {
+            prompt_tokens: analysisData.usage.prompt_tokens || 0,
+            completion_tokens: analysisData.usage.completion_tokens || 0,
+            total_tokens: analysisData.usage.total_tokens || 0
+          };
+        } else {
+          console.log('analysisData.usage 不存在或无效，使用默认值');
+        }
+      } catch (error) {
+        console.error('访问 analysisData.usage 时出错:', error);
+        console.error('analysisData:', analysisData);
+      }
 
       // 显示文档结构分析结果
       if (analysisData.documentStructure) {
@@ -2181,7 +2331,9 @@ ${text.substring(0, 10000)}
         }
 
         renderTabs(allResults);
-        updateTokenUsage(totalUsage.total_tokens > 0 ? totalUsage : null);
+        // 安全地更新 token 使用情况
+        const usageToShow = (totalUsage && totalUsage.total_tokens > 0) ? totalUsage : null;
+        updateTokenUsage(usageToShow);
       }
 
       // 保存完整结果
@@ -2190,7 +2342,7 @@ ${text.substring(0, 10000)}
           analysis_id: crypto.randomUUID(),
         results: allResults,
         metadata: { confidence: 0.8 },
-        usage: totalUsage.total_tokens > 0 ? totalUsage : null,
+        usage: (totalUsage && totalUsage.total_tokens > 0) ? totalUsage : null,
       };
 
       logStep(steps[5].label, steps[5].progress, true);

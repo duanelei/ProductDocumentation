@@ -63,13 +63,23 @@ class DocumentProcessor {
     try {
       console.log('开始阶段1：文档结构分析');
 
-      // 第一阶段：文档结构分析
-      const structureResponse = stream
-        ? await aiService.callAIStream(provider, apiKey, customApiUrl, customModel, messages, 3000,
-            (chunk, fullContent) => onProgress && onProgress('structure', chunk, fullContent))
-        : await aiService.callAI(provider, apiKey, customApiUrl, customModel, messages, 3000);
+      // 第一阶段：文档结构分析（明确非流式，先拆分分档）
+      // 在调用AI API之前，先通知前端
+      if (onProgress && stream) {
+        onProgress('structure', '正在分析文档结构，完成后进入流式阶段...', null);
+      }
 
-      const structureContent = stream ? structureResponse.content : structureResponse.data.choices[0].message.content;
+      // 即使整体是流式流程，结构分析也改为非流式调用
+      const structureResponse = await aiService.callAI(
+        provider,
+        apiKey,
+        customApiUrl,
+        customModel,
+        messages,
+        3000
+      );
+
+      const structureContent = structureResponse.data.choices[0].message.content;
       const structureData = this.extractJsonFromResponse(structureContent);
       const processedDoc = this.validateAndFixResultStructure(structureData, text);
 
@@ -100,11 +110,18 @@ ${designContent}
 3. 用户体验问题
 4. 界面一致性问题
 
-请返回纯JSON格式，不要包含markdown代码块：
-{
-  "result": "详细的设计缺陷分析内容，包括发现的问题和改进建议"
-}`
+请用自然语言详细分析，包括：
+- 发现的具体设计问题
+- 问题的影响和严重程度
+- 改进建议和解决方案
+
+请直接回答，不要使用JSON格式或代码块。`
       });
+
+      // 在调用AI API之前，先通知前端
+      if (onProgress && stream) {
+        onProgress('design', '正在连接AI服务，准备开始设计缺陷检查...', null);
+      }
 
       const designResponse = stream
         ? await aiService.callAIStream(provider, apiKey, customApiUrl, customModel, messages, 2000,
@@ -133,11 +150,18 @@ ${logicContent}
 3. 规则和约束的统一性
 4. 概念定义的一致性
 
-请返回纯JSON格式，不要包含markdown代码块：
-{
-  "result": "详细的逻辑一致性分析内容，包括发现的矛盾和不一致问题"
-}`
+请用自然语言详细分析，包括：
+- 发现的逻辑矛盾和不一致之处
+- 可能导致的业务风险
+- 建议的修正方案
+
+请直接回答，不要使用JSON格式或代码块。`
       });
+
+      // 在调用AI API之前，先通知前端
+      if (onProgress && stream) {
+        onProgress('logic', '正在连接AI服务，准备开始逻辑一致性分析...', null);
+      }
 
       const logicResponse = stream
         ? await aiService.callAIStream(provider, apiKey, customApiUrl, customModel, messages, 2000,
@@ -167,31 +191,47 @@ ${riskContent}
 4. 性能和扩展性风险
 5. 维护和运营风险
 
-请返回纯JSON格式，不要包含markdown代码块：
-{
-  "result": "详细的风险评估内容，包括风险等级、具体风险描述和缓解措施建议"
-}`
+请用自然语言详细分析，包括：
+- 识别出的各类风险及其等级
+- 风险的具体描述和可能影响
+- 建议的风险缓解措施和应对策略
+
+请直接回答，不要使用JSON格式或代码块。`
       });
+
+      // 在调用AI API之前，先通知前端
+      if (onProgress && stream) {
+        onProgress('risk', '正在连接AI服务，准备开始风险评估...', null);
+      }
 
       const riskResponse = stream
         ? await aiService.callAIStream(provider, apiKey, customApiUrl, customModel, messages, 1500,
             (chunk, fullContent) => onProgress && onProgress('risk', chunk, fullContent))
         : await aiService.callAI(provider, apiKey, customApiUrl, customModel, messages, 1500);
 
-          // 解析各阶段结果
-          const designResult = this.extractJsonFromResponse(stream ? designResponse.content : designResponse.data.choices[0].message.content);
-          const logicResult = this.extractJsonFromResponse(stream ? logicResponse.content : logicResponse.data.choices[0].message.content);
-          const riskResult = this.extractJsonFromResponse(stream ? riskResponse.content : riskResponse.data.choices[0].message.content);
+      // 直接使用AI返回的自然语言内容，不再解析JSON
+      // designResponseContent 和 logicResponseContent 已经在上面声明过了
+      const riskResponseContent = stream ? riskResponse.content : riskResponse.data.choices[0].message.content;
+
+      // 安全地获取 usage 信息
+      let usage = null;
+      if (stream) {
+        // 流式模式下，尝试从各个响应中收集 usage
+        usage = riskResponse.usage || designResponse.usage || logicResponse.usage || null;
+      } else {
+        // 非流式模式下，从最后一个响应获取 usage
+        usage = riskResponse.data?.usage || null;
+      }
 
       return {
         processedDoc,
-        usage: stream ? riskResponse.usage : riskResponse.data.usage,
+        usage: usage, // 确保 usage 总是存在（可能是 null）
         documentStructure: `📄 文档摘要：${processedDoc.document_summary}\n\n📊 分析结果：共识别${processedDoc.sections.length}个段落\n\n主要段落：\n${
           processedDoc.sections.slice(0, 5).map(s => `• ${s.title} (${s.category})`).join('\n')
         }${processedDoc.sections.length > 5 ? `\n...还有${processedDoc.sections.length - 5}个段落` : ''}`,
-        '设计缺陷检查': designResult.result || (stream ? designResponse.content : designResponse.data.choices[0].message.content),
-        '逻辑一致性分析': logicResult.result || (stream ? logicResponse.content : logicResponse.data.choices[0].message.content),
-        '风险评估': riskResult.result || (stream ? riskResponse.content : riskResponse.data.choices[0].message.content)
+        '设计缺陷检查': designResponseContent,
+        '逻辑一致性分析': logicResponseContent,
+        '风险评估': riskResponseContent
       };
 
     } catch (error) {
@@ -259,8 +299,11 @@ ${text.substring(0, 10000)}
     console.log('extractJsonFromResponse input length:', content.length);
     console.log('extractJsonFromResponse input preview:', content.substring(0, 200));
 
+    // 确保 cleaned 在整个函数作用域可用，避免 catch 中未定义
+    let cleaned = '';
+
     try {
-      let cleaned = content.trim();
+      cleaned = (content || '').trim();
 
       // 清理markdown代码块
       cleaned = cleaned.replace(/```json\s*/gi, '').replace(/```\s*$/g, '');
@@ -367,7 +410,7 @@ ${text.substring(0, 10000)}
 
     } catch (error) {
       console.error('JSON解析失败:', error.message);
-      console.error('失败内容预览:', cleaned.substring(0, 500));
+      console.error('失败内容预览:', cleaned ? cleaned.substring(0, 500) : '[cleaned is empty]');
 
       // 尝试多种修复策略
       try {
@@ -764,14 +807,13 @@ ${text.substring(0, 10000)}
         const content = this.generateContentForAnalysis(sections, analysisType.maxContentLength);
 
         const messages = [
-          { role: 'system', content: '你是产品文档审查助手，请只输出纯JSON格式，不要包含任何markdown代码块。' },
-          { role: 'user', content: `${analysisType.prompt}\n\n文档片段:\n${content}\n\n请返回：{"result": "详细分析内容"}` }
+          { role: 'system', content: '你是产品文档审查助手，请用自然语言详细分析文档，直接回答，不要使用JSON格式或代码块。' },
+          { role: 'user', content: `${analysisType.prompt}\n\n文档片段:\n${content}\n\n请用自然语言详细分析。` }
         ];
 
         const response = await aiService.callAIStream(provider, apiKey, customApiUrl, customModel, messages, 3000);
-        const parsed = this.extractJsonFromResponse(response.content);
-
-        results[analysisType.key] = parsed.result || response.data.choices[0].message.content;
+        // 直接使用AI返回的自然语言内容
+        results[analysisType.key] = response.content || response.data?.choices?.[0]?.message?.content || '分析失败';
         if (response.data.usage) {
           results.usage = response.data.usage;
         }

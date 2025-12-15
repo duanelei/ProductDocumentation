@@ -187,61 +187,151 @@ app.post('/api/analyze/stream', upload.single('file'), async (req, res) => {
 
     console.log(`开始流式分析文档: ${req.file.originalname}, 大小: ${req.file.size} bytes`);
 
+    // 发送初始状态
+    res.write(`data: ${JSON.stringify({
+      stage: 'processing',
+      message: '正在解析PDF文档...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
     // 解析PDF
     const extractedText = await documentProcessor.parsePdf(req.file.buffer);
     console.log(`PDF解析完成，文本长度: ${extractedText.length}`);
 
+    // 设置心跳机制 - 定期发送进度更新
+    // 这个机制确保即使AI API响应很慢，前端也能收到更新
+    let lastProgressTime = Date.now();
+    let heartbeatCounter = 0;
+    const heartbeatInterval = setInterval(() => {
+      const timeSinceLastProgress = Date.now() - lastProgressTime;
+      heartbeatCounter++;
+      
+      // 每15秒发送一次心跳，无论是否有进度更新
+      // 这样可以确保前端知道连接仍然活跃
+      try {
+        const messages = [
+          'AI正在处理中，请耐心等待...',
+          '正在分析文档内容，这可能需要几分钟...',
+          'AI服务正在响应，请稍候...',
+          '分析进行中，请保持连接...'
+        ];
+        const message = messages[heartbeatCounter % messages.length];
+        
+        res.write(`data: ${JSON.stringify({
+          stage: 'heartbeat',
+          message: message,
+          timestamp: new Date().toISOString(),
+          elapsed: Math.round((Date.now() - lastProgressTime) / 1000) + '秒'
+        })}\n\n`);
+      } catch (e) {
+        // 如果连接已关闭，清除定时器
+        console.error('发送心跳失败，连接可能已关闭:', e.message);
+        clearInterval(heartbeatInterval);
+      }
+    }, 15000); // 每15秒发送一次心跳
+
     // 流式分阶段分析
-    const analysisResults = await documentProcessor.performStagedAnalysis(
-      extractedText,
-      provider,
-      apiKey,
-      customApiUrl,
-      customModel,
-      {
-        stream: true,
-        onProgress: (stage, chunk, fullContent) => {
-          console.log(`流式进度: ${stage}, chunk长度: ${chunk ? chunk.length : 0}`);
-          if (chunk) {
-            // 发送流式数据
-            const data = {
-              stage,
-              chunk,
-              timestamp: new Date().toISOString()
-            };
-            const dataStr = `data: ${JSON.stringify(data)}\n\n`;
-            console.log(`发送流式数据: ${dataStr.substring(0, 100)}...`);
-            res.write(dataStr);
-          } else if (stage.includes('_complete')) {
-            // 发送阶段完成信号
-            const completionData = {
-              stage,
-              completed: true,
-              timestamp: new Date().toISOString()
-            };
+    try {
+      const analysisResults = await documentProcessor.performStagedAnalysis(
+        extractedText,
+        provider,
+        apiKey,
+        customApiUrl,
+        customModel,
+        {
+          stream: true,
+          onProgress: (stage, chunk, fullContent) => {
+            lastProgressTime = Date.now(); // 更新最后进度时间
+            console.log(`流式进度: ${stage}, chunk长度: ${chunk ? chunk.length : 0}`);
+            
+            if (chunk) {
+              // 发送流式数据
+              const data = {
+                stage,
+                chunk,
+                timestamp: new Date().toISOString()
+              };
+              const dataStr = `data: ${JSON.stringify(data)}\n\n`;
+              console.log(`发送流式数据: ${dataStr.substring(0, 100)}...`);
+              try {
+                res.write(dataStr);
+              } catch (e) {
+                console.error('写入流式数据失败:', e);
+                clearInterval(heartbeatInterval);
+              }
+            } else if (stage.includes('_complete')) {
+              // 发送阶段完成信号
+              const completionData = {
+                stage,
+                completed: true,
+                timestamp: new Date().toISOString()
+              };
 
-            // 对于structure_complete，添加更多信息
-            if (stage === 'structure_complete' && fullContent) {
-              completionData.sectionCount = fullContent.sections?.length || 0;
-              completionData.documentSummary = fullContent.document_summary || '';
+              // 对于structure_complete，添加更多信息
+              if (stage === 'structure_complete' && fullContent) {
+                completionData.sectionCount = fullContent.sections?.length || 0;
+                completionData.documentSummary = fullContent.document_summary || '';
+              }
+
+              try {
+                res.write(`data: ${JSON.stringify(completionData)}\n\n`);
+              } catch (e) {
+                console.error('写入完成数据失败:', e);
+                clearInterval(heartbeatInterval);
+              }
+            } else {
+              // 其他类型的进度更新（比如"正在连接AI服务"）
+              const progressData = {
+                stage,
+                chunk: chunk || '',
+                message: chunk || '处理中...',
+                timestamp: new Date().toISOString()
+              };
+              try {
+                res.write(`data: ${JSON.stringify(progressData)}\n\n`);
+              } catch (e) {
+                console.error('写入进度数据失败:', e);
+                clearInterval(heartbeatInterval);
+              }
             }
-
-            res.write(`data: ${JSON.stringify(completionData)}\n\n`);
           }
         }
+      );
+
+      // 清除心跳定时器
+      clearInterval(heartbeatInterval);
+
+      // 发送最终结果
+      // 确保 usage 信息被包含在结果中，并且总是存在（即使是 null）
+      const finalResults = {
+        ...analysisResults,
+        usage: (analysisResults && analysisResults.usage) ? analysisResults.usage : null
+      };
+      
+      // 确保 finalResults 包含所有必需的字段
+      if (!finalResults.processedDoc) {
+        console.warn('finalResults 缺少 processedDoc');
       }
-    );
+      
+      console.log('发送最终结果，包含字段:', Object.keys(finalResults));
+      console.log('usage 信息:', finalResults.usage);
+      
+      res.write(`data: ${JSON.stringify({
+        stage: 'complete',
+        results: finalResults,
+        timestamp: new Date().toISOString()
+      })}\n\n`);
 
-    // 发送最终结果
-    res.write(`data: ${JSON.stringify({
-      stage: 'complete',
-      results: analysisResults,
-      timestamp: new Date().toISOString()
-    })}\n\n`);
+      // 结束流
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch (analysisError) {
+      // 清除心跳定时器
+      clearInterval(heartbeatInterval);
+      throw analysisError;
+    }
 
-    // 结束流
-    res.write('data: [DONE]\n\n');
-    res.end();
+    // 这部分代码已经移到上面的try块中
 
   } catch (error) {
     console.error('流式文档分析失败:', error);

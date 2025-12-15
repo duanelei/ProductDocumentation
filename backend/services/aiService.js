@@ -110,10 +110,15 @@ class AIService {
       headers['Authorization'] = `Bearer ${apiKey}`;
     }
 
+    // 在开始请求之前，先发送一个初始消息
+    if (onChunk) {
+      onChunk('正在连接AI服务...', '');
+    }
+
     try {
       const response = await axios.post(url, payload, {
         headers,
-        timeout: 180000, // 3分钟超时（流式需要更长时间）
+        timeout: 300000, // 5分钟超时（流式需要更长时间，避免在等待AI API响应时超时）
         maxContentLength: Infinity,
         maxBodyLength: Infinity,
         responseType: 'stream' // 启用流式响应
@@ -122,6 +127,7 @@ class AIService {
       return new Promise((resolve, reject) => {
         let fullContent = '';
         let buffer = '';
+        let usage = null; // 用于存储 usage 信息
 
         response.data.on('data', (chunk) => {
           buffer += chunk.toString();
@@ -133,8 +139,8 @@ class AIService {
             if (line.startsWith('data: ')) {
               const data = line.slice(6).trim();
               if (data === '[DONE]') {
-                // 流式响应结束
-                resolve({ content: fullContent, usage: null });
+                // 流式响应结束，返回完整内容和 usage
+                resolve({ content: fullContent, usage: usage });
                 return;
               }
 
@@ -148,6 +154,11 @@ class AIService {
                     onChunk(delta, fullContent);
                   }
                 }
+                
+                // 检查是否有 usage 信息（通常在最后一个数据包中）
+                if (parsed.usage) {
+                  usage = parsed.usage;
+                }
               } catch (e) {
                 // 忽略解析错误，继续处理下一行
                 console.warn('Failed to parse stream chunk:', e.message);
@@ -157,9 +168,8 @@ class AIService {
         });
 
         response.data.on('end', () => {
-          if (!fullContent) {
-            resolve({ content: '', usage: null });
-          }
+          // 流式响应结束，返回内容和 usage
+          resolve({ content: fullContent || '', usage: usage || null });
         });
 
         response.data.on('error', (error) => {
