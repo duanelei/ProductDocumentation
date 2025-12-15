@@ -554,9 +554,9 @@ ${text.substring(0, 10000)}
       validated.document_type = '产品文档';
     }
 
-    // 验证sections
-    if (!Array.isArray(validated.sections)) {
-      validated.sections = [];
+    // 验证sections；若缺失或为空则直接降级分块
+    if (!Array.isArray(validated.sections) || validated.sections.length === 0) {
+      return this.fallbackChunking(originalText);
     }
 
     // 验证和修复sections

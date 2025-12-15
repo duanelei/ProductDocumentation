@@ -271,6 +271,7 @@ app.post('/api/analyze/stream', upload.single('file'), async (req, res) => {
               if (stage === 'structure_complete' && fullContent) {
                 completionData.sectionCount = fullContent.sections?.length || 0;
                 completionData.documentSummary = fullContent.document_summary || '';
+                completionData.processedDoc = fullContent; // 传递结构化文档，供前端立即展示
               }
 
               try {

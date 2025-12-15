@@ -2087,9 +2087,19 @@ ${text.substring(0, 10000)}
                           const progress = getStageProgress(stageName);
 
                           if (stageName === 'structure') {
-                            // 文档结构分析完成，显示摘要信息
+                            // 文档结构分析完成，若携带结构结果则立即展示
                             const sectionCount = data.sectionCount || 0;
                             updateStreamingContent(stageName, `文档结构分析完成，发现 ${sectionCount} 个段落`);
+
+                            if (data.processedDoc) {
+                              allResults['文档结构分析'] = `📄 文档摘要：${data.processedDoc.document_summary || '文档结构分析完成'}\n\n📊 分析结果：共识别${data.processedDoc.sections?.length || 0}个段落\n\n主要段落：\n${
+                                (data.processedDoc.sections || []).slice(0, 5).map(s => `• ${s.title || '段落'}`).join('\n') || '（暂无段落）'
+                              }${(data.processedDoc.sections || []).length > 5 ? `\n...还有${(data.processedDoc.sections || []).length - 5}个段落` : ''}`;
+                              // 更新文档统计并刷新tabs
+                              updateDocStats(data.processedDoc);
+                              renderTabs(allResults);
+                            }
+
                             // 结构分析完成后立即关闭弹窗，其余阶段继续流式展示在Tab
                             if (!overlayClosed) {
                               removeStreamingDisplay();
